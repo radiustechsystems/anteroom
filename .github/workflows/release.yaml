@@ -1,0 +1,311 @@
+name: release
+# Builds the container image and publishes it to GHCR, and cuts the GitHub
+# Release that goes with it.
+#
+# A tag push is the only trigger. Pushing `refs/tags/v1.2.3` is not an
+# incidental commit — it is someone stating that a specific tree is the thing
+# other people should run — and publishing is the one thing that should happen
+# exactly when someone says so and at no other time.
+#
+#   git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
+#
+# Nothing publishes from off main. A tag is a ref, not a lineage: `git tag v9.9.9`
+# on a branch, a fork's history, or a commit that never made it through review is
+# a perfectly valid tag push, and without the `on-main` job below it would put an
+# image on the registry that no reviewed history contains. The job is first and
+# cheap so a mistagged commit costs seconds rather than a published `:latest`.
+#
+# The full versioning contract — what each tag means, which tags move, how a
+# beta differs from a release — is docs/releasing.md. It is the document to read
+# before adding a tag rule here; the two have to agree or the tags lie.
+#
+# Publishing is gated on `ci.yaml` passing as a reusable workflow, including the
+# acceptance tiers — the same definition of "verified" a pull request gets, not a
+# second, laxer one. A release is the one build nobody gets to run the suite
+# against afterwards and quietly fix: the tag is already in the world.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# Two tag pushes must not race to move `:latest`. Not cancel-in-progress: a
+# half-published multi-arch manifest is worse than a queued second run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Only main gets published. This is the check, and everything else needs it,
+  # so the answer to "I tagged the wrong commit" arrives before any expensive
+  # job starts.
+  #
+  # Ancestry, not equality: main moves on after a tag is cut, so the question is
+  # whether the commit being published is *in* main's history, which is the thing
+  # "reviewed and merged" actually means here. `compare` answers exactly that —
+  # `behind` or `identical` means main contains the commit — and answers it
+  # without cloning the repository to run `git merge-base`. A squash-merged
+  # commit comes back `diverged` and is deliberately refused: its original SHA
+  # is not in main, so main does not contain the tree being tagged, whatever the
+  # diff looked like.
+  on-main:
+    name: on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: the tagged commit must be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)"
+          case "$status" in
+            identical|behind)
+              echo "$GITHUB_SHA is on main ($status)"
+              ;;
+            *)
+              echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not in main's history ($status). Nothing publishes from off main — merge it first, then tag the merged commit."
+              exit 1
+              ;;
+          esac
+
+  # The same suite `ci.yaml` runs by hand, called rather than copied — a check
+  # list that exists in two places is a check list that will differ.
+  verify:
+    needs: [on-main]
+    uses: ./.github/workflows/ci.yaml
+
+  # `needs: [verify]` carries the gate transitively: a failed `on-main` skips
+  # `verify`, which skips this. There is no path to the registry that does not
+  # pass both.
+  image:
+    runs-on: ubuntu-latest
+    needs: [verify]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write   # push to GHCR
+      id-token: write   # keyless signing (cosign), see below
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: image name
+        id: name
+        env:
+          # Derived from the owner, not written down, so this file is correct in
+          # whichever repository it lands in. Run from radiustechsystems/anteroom
+          # — the public repository, and the one releases are cut from — it
+          # publishes ghcr.io/radiustechsystems/anteroom, the name the site
+          # advertises. Run from a development repository it publishes under that
+          # owner instead, which is the honest answer: GHCR packages belong to an
+          # owner and the default GITHUB_TOKEN can only write packages under the
+          # running repository's owner.
+          #
+          # Publishing to another owner's package is therefore a credentials
+          # problem rather than an edit here: set the ANTEROOM_IMAGE variable to
+          # the full path and the GHCR_TOKEN secret to a PAT with write:packages,
+          # and unset both when they stop being needed. docs/releasing.md.
+          OVERRIDE: ${{ vars.ANTEROOM_IMAGE }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          image="${OVERRIDE:-ghcr.io/${OWNER}/anteroom}"
+          # A registry path is lowercase; a GitHub owner need not be.
+          image="$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "publishing as $image, version ${GITHUB_REF_NAME}"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GHCR_TOKEN only needs to exist when publishing outside this owner;
+          # an unset secret is the empty string, so the default token wins.
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Tag policy. docs/releasing.md is the prose version; this is the
+      # enforcement, and every `enable=` here is a decision:
+      #
+      #   v1.2.3        -> 1.2.3, 1.2, 1, latest
+      #   v1.2.3-beta.1 -> 1.2.3-beta.1, beta        (no latest, no 1.2, no 1)
+      #   v0.3.1        -> 0.3.1, 0.3, latest        (no 0 — see below)
+      #   always        -> sha-<full commit>
+      #
+      # A prerelease must not move a floating tag someone pinned expecting
+      # stability: `:1.2` and `:latest` are promises, and a beta is the one
+      # build that has not earned them. `:beta` is the moving pointer for people
+      # who asked for the edge of the next release. A hyphen in the tag is what
+      # marks one, by semver's own rule.
+      #
+      # No `:0`. Under semver 0.x the minor bump is where breakage lives, so a
+      # major-only tag on a 0.x release would pin nothing while looking like it
+      # pinned something.
+      - name: tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          # latest is set explicitly below, not inferred.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.title=anteroom
+            org.opencontainers.image.description=A gate that makes visitors prove they meant it.
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/docs/docker.md
+
+      - name: build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # amd64 and arm64 both, because Tier 0 asserts the image builds for
+          # both and a single-arch publish would make that assertion decorative.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # .git is out of the build context on purpose (.dockerignore), so the
+          # toolchain cannot stamp the binary itself. These two build args are
+          # the only way the running gate can say which code it is. VERSION is
+          # the tag verbatim, so that what an operator reads off /metrics is the
+          # string they can `git show`.
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # An SBOM and a max-mode provenance attestation, pushed alongside the
+          # manifest. For a distroless static binary the SBOM is short, which is
+          # the point: it is the artifact an operator diffs after an advisory.
+          provenance: mode=max
+          sbom: true
+
+      # Keyless, so there is no signing key to store, rotate, or leak: the
+      # signature is bound to this workflow's identity and anyone can check it
+      # against that. Verify a pull with:
+      #
+      #   cosign verify ghcr.io/<owner>/anteroom:<tag> \
+      #     --certificate-identity-regexp '^https://github.com/<owner>/<repo>/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      #
+      # Signed by digest, once. A signature is a statement about bytes; tags
+      # move and the bytes do not.
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: sign the manifest
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # Pull what was actually published and start it. Tier 0 graded the image
+      # the runner built; this grades the bytes a user gets, which is a
+      # different claim — a broken manifest list, a platform that did not make
+      # it into the index, or a push that half succeeded all look fine until
+      # someone runs `docker pull`.
+      - name: smoke test the published image
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke \
+            -e ANTEROOM_UPSTREAM=127.0.0.1:9 \
+            -e ANTEROOM_HMAC_KEY="$(openssl rand -base64 32)" \
+            -p 18080:8080 "${IMAGE}@${DIGEST}"
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18080/.anteroom/healthz >/dev/null; then
+              echo "healthz answered after ${i}s"
+              docker rm -f smoke >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "published image never answered /.anteroom/healthz" >&2
+          docker logs smoke >&2 || true
+          docker rm -f smoke >/dev/null || true
+          exit 1
+
+  # The Release gives every version a page, a changelog, and a URL that
+  # resolves — anteroom.dev points people at /releases. It carries no binary
+  # assets yet; the image is the artifact.
+  release:
+    needs: [image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          IMAGE: ${{ needs.image.outputs.image }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          # Re-running the workflow on a tag that already has a Release is a
+          # normal thing to do — a signing hiccup, a transient push failure — and
+          # it should not fail here after the image published fine.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; leaving it alone"
+            exit 0
+          fi
+
+          # A tag containing a hyphen is a prerelease, by the same rule the tag
+          # policy above uses and semver's own: v1.2.3-beta.1. Marking it is
+          # what keeps it out of "latest release" everywhere GitHub reports one.
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease);; esac
+
+          # Commit list since the previous tag, from GitHub rather than
+          # hand-rolled, then a header with the two things a reader wants: how
+          # to pull it and the digest to pin.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body > /tmp/generated.md
+
+          {
+            echo "## Container image"
+            echo
+            echo '```sh'
+            echo "docker pull ${IMAGE}:${TAG#v}"
+            echo '```'
+            echo
+            echo "Pin the digest for anything that matters — tags move, digests do not:"
+            echo
+            echo '```'
+            echo "${IMAGE}@${DIGEST}"
+            echo '```'
+            echo
+            echo "\`linux/amd64\` and \`linux/arm64\`, signed with cosign and published"
+            echo "with an SBOM and provenance. Verification and the tag policy:"
+            echo "[docs/releasing.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/releasing.md)."
+            echo
+            cat /tmp/generated.md
+          } > /tmp/notes.md
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+            --verify-tag \
+            "${prerelease[@]}"

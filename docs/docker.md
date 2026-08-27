@@ -93,6 +93,24 @@ The image ships a config at `/etc/anteroom/anteroom.toml` containing every
 default and no `upstream`, which is why the environment variable alone is
 enough to start. Mounting your own file over that path replaces it wholesale.
 
+## Which tag
+
+That command takes `:latest`, which is right for trying it and wrong in front of
+a real site — with `pull_policy: always` or a Kubernetes `imagePullPolicy:
+Always`, a restart can change the gate.
+
+| Tag | Moves | Use |
+|---|---|---|
+| `@sha256:…` | never | production |
+| `:0.4` | patch releases only | production, if you want fixes without review |
+| `:latest` | every release | trying it out |
+| `:beta` | every prerelease | testing the next release |
+
+Every build also gets `:sha-<full commit>`, which is never reused.
+[`releasing.md`](releasing.md) is the full policy: what a version number
+promises, how to verify the signature and SBOM, and how to ask a running gate
+which commit it is.
+
 ## The container contract
 
 **Environment variables.** Only these four exist. Everything else is a config

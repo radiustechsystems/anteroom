@@ -1,8 +1,29 @@
 name: ci
+# `workflow_call` is how release.yaml stops depending on someone remembering to
+# check: it calls this workflow and refuses to publish unless it passes.
+# Everything below is the definition of "verified" for both paths, which is the
+# only reason it is worth calling rather than copying.
 on:
+  # A commit on a PR branch is both a `push` and a `pull_request` synchronize
+  # event, so an unscoped `push` runs every job twice for the same tree. Scoping
+  # `push` to the default branch leaves exactly one run per commit: branch
+  # commits are covered by `pull_request`, and post-merge commits on `main` by
+  # `push`. Tag pushes are deliberately absent — release.yaml calls this
+  # workflow, so adding tags here would duplicate that too.
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
+  workflow_call:
+
+# Superseded runs are wasted capacity, not extra coverage: a new commit on a
+# branch invalidates the in-flight run for the previous one. `main` and the
+# release path are excluded from cancellation so every merged commit and every
+# gated publish keeps a completed result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

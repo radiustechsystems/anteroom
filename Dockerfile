@@ -39,13 +39,34 @@ ARG TARGETARCH
 # which is the truth about a build that was handed no revision.
 ARG VCS_REF
 
+# The version, for the same metric and for the same reason: debug.BuildInfo
+# reports Main.Version as "(devel)" for anything not installed as
+# module@version, which is every image ever built here. A published image is the
+# one build that genuinely has a version — the tag it was released under — and
+# without this it would be the build least able to say so.
+#
+#   docker build --build-arg VERSION=v1.2.3 .
+#
+# Unset is not an error: the metric keeps reporting "(devel)", which is the
+# truth about a build nobody released.
+ARG VERSION
+
 # CGO_ENABLED=0 is what makes the binary static enough for a distroless base.
 # -trimpath keeps build paths out of the binary (reproducibility, and it is one
 # less thing leaked by a panic); -s -w drop the symbol table and DWARF, which is
 # roughly a third of the size and costs only a symbolized stack trace.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+#
+# The two -X paths are assembled from `go list -m` rather than written out. A
+# wrong -X path is not a build error — the linker ignores an override it cannot
+# resolve, silently, and the gate then reports the toolchain's own guesses while
+# the build log says nothing. That is the worst failure mode available here,
+# because the whole point of these two variables is to be believed.
+RUN MOD="$(go list -m)" && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath \
-      -ldflags="-s -w -X github.com/radiustechsystems/anteroom/internal/metrics.Revision=${VCS_REF}" \
+      -ldflags="-s -w \
+        -X ${MOD}/internal/metrics.Revision=${VCS_REF} \
+        -X ${MOD}/internal/metrics.Version=${VERSION}" \
       -o /out/anteroom ./cmd/anteroom
 
 # Seed the payment-state mount point with ownership matching the runtime user.

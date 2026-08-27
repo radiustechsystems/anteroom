@@ -1,0 +1,84 @@
+# Policy for the reference deployment: hello-app with a gate in front.
+#
+# The acceptance suite runs against this file, so it is a working example rather
+# than an illustration. `anteroom.example.toml` at the repository root documents
+# the full surface with the reasoning behind every default; this is the subset a
+# small site actually sets, plus the two settings a container deployment gets
+# wrong.
+#
+# Unknown keys are a startup error, not a silent default — check spelling
+# against anteroom.example.toml.
+
+# All interfaces INSIDE the container, published to the host by compose.
+#
+# Trap 2 in docs/docker.md: the shipped default is `127.0.0.1:8080`, which is
+# loopback within the container's own network namespace. Published as
+# "8080:8080" it would accept the mapping and then connect to nothing, and the
+# symptom is an empty reply rather than an error naming the cause.
+listen = ":8080"
+
+# `upstream` is deliberately absent. It comes from ANTEROOM_UPSTREAM in
+# compose.yaml — "app:3000", the service NAME, because in compose the app is a
+# different host. (In a Kubernetes sidecar it would be 127.0.0.1; the containers
+# share a namespace there.)
+
+pass_ttl    = "60s"   # a pass is short-lived on purpose; the service worker
+max_session = "30m"   # renews it in the background up to this cap
+difficulty  = 14      # ~16k WebCrypto hashes: about a second on a laptop
+renew_difficulty = 6  # renewals are cheap by design (mobile battery)
+inject = true         # add the renewal script to proxied HTML, so renewal keeps
+                      # running once the visitor has left the wait page
+
+# The wait page, mounted read-only from ./pages by compose. Both header.html and
+# footer.html must exist or the gate refuses to start — deliberately, since a
+# half-configured wait page is a blank interstitial. They are re-read on every
+# challenge: edit and reload, no restart and no rebuild.
+pages = "/etc/anteroom/pages"
+
+# Trap 1 in docs/docker.md, and false here only because you reach this at
+# http://localhost:8080.
+#
+# WebCrypto and service workers require a secure context — HTTPS or loopback.
+# Browsers treat http://192.168.x.y as insecure, so if you publish this on a LAN
+# address with this off, the puzzle cannot run at all and every visitor is
+# walled permanently. Two ways out, and only two: put a TLS terminator in front
+# (the real fix, and then set trusted_proxies below), or set this to true and
+# accept a JavaScript SHA-256 that is 10-50x slower per hash, with that cost
+# falling on the honest visitor.
+allow_insecure_context = false
+
+# Empty, and correct here, because nothing in front of the gate sets
+# X-Forwarded-For: the host port maps straight onto the container. Behind Caddy
+# or nginx this must name the proxy's network (see docs/nginx.md) or three
+# things break quietly — the pass cookie loses its Secure flag, your application
+# sees the proxy's address instead of the visitor's, and CIDR bypass matches the
+# wrong thing.
+#
+# The cost of an empty list in this topology is that Docker's NAT hides client
+# IPs, which is why bypass.cidrs below is unusable here.
+trusted_proxies = []
+
+# No [[hmac_keys]]: the signing key comes from ANTEROOM_HMAC_KEY, supplied by
+# .env, which is not committed. Without one a key is generated per process —
+# passes die on every restart and no second replica can verify them.
+
+[bypass]
+# Paths that skip the gate entirely, byte for byte and with no pass.
+#
+# `/webhooks/*` is the row that costs real money. A POST from a payment provider
+# is not a browser navigation, so without this line the gate refuses it and the
+# body is gone — see the "what Anteroom breaks" table in the README.
+paths = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*", "/webhooks/*"]
+# Unusable in this topology: with trusted_proxies empty, every request appears
+# to come from the compose bridge, so any range here would match all traffic or
+# none of it.
+cidrs = []
+
+[triage]
+# Accept: application/json earns a machine-readable 402/401 body instead of the
+# markdown one.
+json_accept    = true
+# User agents of fetch tools that discard the body of any non-2xx response. For
+# those clients the same instructions are served with status 200, which is the
+# only status they surface. Matched case-insensitively as a substring.
+ok_body_agents = ["claude-user"]

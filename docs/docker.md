@@ -105,7 +105,6 @@ Always`, a restart can change the gate.
 | `:0.4` | patch releases only | production, if you want fixes without review |
 | `:latest` | every release | trying it out |
 | `:beta` | every prerelease | testing the next release |
-| `:edge` | on demand from main | unreviewed; expect nothing |
 
 Every build also gets `:sha-<full commit>`, which is never reused.
 [`releasing.md`](releasing.md) is the full policy: what a version number

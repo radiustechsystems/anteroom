@@ -2,20 +2,18 @@ name: release
 # Builds the container image and publishes it to GHCR, and cuts the GitHub
 # Release that goes with it.
 #
-# A tag push is the only automatic trigger, deliberately. Pushing
-# `refs/tags/v1.2.3` is not an incidental commit — it is someone stating that a
-# specific tree is the thing other people should run — and publishing is the one
-# thing that should happen exactly when someone says so and at no other time. A
-# branch build is available from the Actions tab (`workflow_dispatch`) and
-# publishes `:edge` when run from main.
+# A tag push is the only trigger. Pushing `refs/tags/v1.2.3` is not an
+# incidental commit — it is someone stating that a specific tree is the thing
+# other people should run — and publishing is the one thing that should happen
+# exactly when someone says so and at no other time.
 #
 #   git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
 #
 # Nothing publishes from off main. A tag is a ref, not a lineage: `git tag v9.9.9`
 # on a branch, a fork's history, or a commit that never made it through review is
-# a perfectly valid tag push, and without the `on_main` job below it would put an
+# a perfectly valid tag push, and without the `on-main` job below it would put an
 # image on the registry that no reviewed history contains. The job is first and
-# cheap so a mistagged commit costs ten seconds rather than a published `:latest`.
+# cheap so a mistagged commit costs seconds rather than a published `:latest`.
 #
 # The full versioning contract — what each tag means, which tags move, how a
 # beta differs from a release — is docs/releasing.md. It is the document to read
@@ -30,17 +28,6 @@ on:
   push:
     tags:
       - 'v*'
-    # Uncomment to publish :edge on every merge to main. Left off because a
-    # dispatch from main produces the identical image when one is actually
-    # wanted, and an image nobody asked for is an image nobody checks.
-    # branches:
-    #   - main
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Push the image (off = multi-arch build only, nothing leaves the runner)'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -52,58 +39,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Only main gets published. This is the check, and it runs before the expensive
-  # one so the answer to "I tagged the wrong commit" arrives immediately.
+  # Only main gets published. This is the check, and everything else needs it,
+  # so the answer to "I tagged the wrong commit" arrives before any expensive
+  # job starts.
   #
   # Ancestry, not equality: main moves on after a tag is cut, so the question is
   # whether the commit being published is *in* main's history, which is the thing
-  # "reviewed and merged" actually means here. A squash-merged commit is
-  # deliberately refused — its original SHA is not in main, so main does not
-  # contain the tree being tagged, whatever the diff looked like.
-  #
-  # Skipped for a dry run: nothing leaves the runner, so there is nothing to
-  # protect and a feature branch is a fine thing to test the release path from.
-  on_main:
-    # Underscore, not a hyphen: `needs.on_main.result` parses as subtraction.
+  # "reviewed and merged" actually means here. `compare` answers exactly that —
+  # `behind` or `identical` means main contains the commit — and answers it
+  # without cloning the repository to run `git merge-base`. A squash-merged
+  # commit comes back `diverged` and is deliberately refused: its original SHA
+  # is not in main, so main does not contain the tree being tagged, whatever the
+  # diff looked like.
+  on-main:
     name: on main
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # The whole history of both refs, or the ancestry test cannot be made.
-          fetch-depth: 0
-      - name: the commit must be on main
+      - name: the tagged commit must be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Explicit rather than relying on what fetch-depth:0 happens to bring
-          # down — this is a gate, and a gate that fails open is not a gate.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "$GITHUB_SHA is on main"
-            exit 0
-          fi
-          echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not in main's history. Nothing publishes from off main — merge it first, then tag the merged commit."
-          exit 1
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)"
+          case "$status" in
+            identical|behind)
+              echo "$GITHUB_SHA is on main ($status)"
+              ;;
+            *)
+              echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not in main's history ($status). Nothing publishes from off main — merge it first, then tag the merged commit."
+              exit 1
+              ;;
+          esac
 
   # The same suite `ci.yaml` runs by hand, called rather than copied — a check
   # list that exists in two places is a check list that will differ.
-  #
-  # Skipped for a dry run, where nothing is published and there is nothing to
-  # protect. Any real publish waits for it.
   verify:
-    needs: [on_main]
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+    needs: [on-main]
     uses: ./.github/workflows/ci.yaml
 
+  # `needs: [verify]` carries the gate transitively: a failed `on-main` skips
+  # `verify`, which skips this. There is no path to the registry that does not
+  # pass both.
   image:
     runs-on: ubuntu-latest
-    needs: [on_main, verify]
-    # `needs` on a skipped job skips this one too by default; a dry run has
-    # neither gate to wait for and still wants to build. A *failed* gate stops
-    # here — the `!= 'failure'` is what makes the skip case safe.
-    if: ${{ !cancelled() && needs.on_main.result != 'failure' && needs.verify.result != 'failure' }}
+    needs: [verify]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -112,11 +92,10 @@ jobs:
     outputs:
       image: ${{ steps.name.outputs.image }}
       digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.name.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: image name and version
+      - name: image name
         id: name
         env:
           # Derived from the owner, not written down, so this file is correct in
@@ -140,24 +119,12 @@ jobs:
           # A registry path is lowercase; a GitHub owner need not be.
           image="$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-
-          # The version stamped into the binary and reported by
-          # anteroom_build_info. The tag verbatim for a release, so that what an
-          # operator reads off /metrics is the string they can `git show`; for a
-          # branch build, edge plus the commit, which is the only honest answer.
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            version="$GITHUB_REF_NAME"
-          else
-            version="edge-${GITHUB_SHA::12}"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "publishing as $image, version $version"
+          echo "publishing as $image, version ${GITHUB_REF_NAME}"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: log in to ghcr.io
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -172,13 +139,13 @@ jobs:
       #   v1.2.3        -> 1.2.3, 1.2, 1, latest
       #   v1.2.3-beta.1 -> 1.2.3-beta.1, beta        (no latest, no 1.2, no 1)
       #   v0.3.1        -> 0.3.1, 0.3, latest        (no 0 — see below)
-      #   main dispatch -> edge
       #   always        -> sha-<full commit>
       #
       # A prerelease must not move a floating tag someone pinned expecting
       # stability: `:1.2` and `:latest` are promises, and a beta is the one
       # build that has not earned them. `:beta` is the moving pointer for people
-      # who asked for the edge of the next release.
+      # who asked for the edge of the next release. A hyphen in the tag is what
+      # marks one, by semver's own rule.
       #
       # No `:0`. Under semver 0.x the minor bump is where breakage lives, so a
       # major-only tag on a 0.x release would pin nothing while looking like it
@@ -194,14 +161,13 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
-            type=raw,value=beta,enable=${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
             type=sha,format=long
           labels: |
             org.opencontainers.image.title=anteroom
             org.opencontainers.image.description=A gate that makes visitors prove they meant it.
-            org.opencontainers.image.version=${{ steps.name.outputs.version }}
+            org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/docs/docker.md
 
       - name: build and push
@@ -212,16 +178,18 @@ jobs:
           # amd64 and arm64 both, because Tier 0 asserts the image builds for
           # both and a single-arch publish would make that assertion decorative.
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          build-args: |
-            VCS_REF=${{ github.sha }}
-            VERSION=${{ steps.name.outputs.version }}
           # .git is out of the build context on purpose (.dockerignore), so the
           # toolchain cannot stamp the binary itself. These two build args are
-          # the only way the running gate can say which code it is.
+          # the only way the running gate can say which code it is. VERSION is
+          # the tag verbatim, so that what an operator reads off /metrics is the
+          # string they can `git show`.
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # An SBOM and a max-mode provenance attestation, pushed alongside the
@@ -241,10 +209,8 @@ jobs:
       # Signed by digest, once. A signature is a statement about bytes; tags
       # move and the bytes do not.
       - name: install cosign
-        if: ${{ steps.build.outputs.digest != '' }}
         uses: sigstore/cosign-installer@v3
       - name: sign the manifest
-        if: ${{ steps.build.outputs.digest != '' }}
         env:
           IMAGE: ${{ steps.name.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -256,7 +222,6 @@ jobs:
       # it into the index, or a push that half succeeded all look fine until
       # someone runs `docker pull`.
       - name: smoke test the published image
-        if: ${{ steps.build.outputs.digest != '' }}
         env:
           IMAGE: ${{ steps.name.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -283,7 +248,6 @@ jobs:
   # resolves — anteroom.dev points people at /releases. It carries no binary
   # assets yet; the image is the artifact.
   release:
-    if: ${{ github.ref_type == 'tag' }}
     needs: [image]
     runs-on: ubuntu-latest
     permissions:

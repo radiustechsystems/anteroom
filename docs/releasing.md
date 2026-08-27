@@ -21,7 +21,10 @@ workflow file is a promise nobody can read.
 |---|---|
 | `v1.4.0` | `git tag -a v1.4.0 -m v1.4.0 && git push origin v1.4.0` |
 | `v1.4.0-beta.1` | the same, with the prerelease tag |
-| a preview of main | Actions → release → Run workflow, `publish` on |
+
+A tag push is the only thing that publishes. There is no button, and no build
+off a branch: the trigger is someone stating that a specific tree is the thing
+other people should run.
 
 Tag a commit **on main** — nothing publishes from off main, and that is the first
 thing the run checks. Then it runs the full suite — unit tests, vet, staticcheck,
@@ -59,7 +62,6 @@ several names for it:
 | `v1.4.0` | `1.4.0`, `1.4`, `1`, `latest`, `sha-<commit>` |
 | `v0.4.0` | `0.4.0`, `0.4`, `latest`, `sha-<commit>` |
 | `v1.4.0-beta.1` | `1.4.0-beta.1`, `beta`, `sha-<commit>` |
-| _(dispatch from main)_ | `edge`, `sha-<commit>` |
 
 Three of those are decisions rather than defaults:
 
@@ -74,8 +76,8 @@ looking like it pinned something. It reappears at `v1.0.0`, where it means what
 it says.
 
 **`sha-<commit>` is the full hash, not a prefix**, so it can be pasted into
-`git show`. Every build gets one, including betas and edge — it is the only tag
-that is never reused.
+`git show`. Every build gets one, betas included — it is the only tag that is
+never reused.
 
 ## What to pin
 
@@ -85,7 +87,6 @@ that is never reused.
 | running it in front of a real site, and want patches | `:1.4` (or `:0.4` pre-1.0) | Fixes, no surface changes. |
 | kicking the tyres | `:latest` | Fine. Not fine in production, where "whatever shipped this morning" is not a deployment decision. |
 | testing the next release | `:beta` | Moves to each new prerelease. |
-| tracking main | `:edge` | Published on demand, not on merge. Unreviewed by definition. |
 
 `:latest` deserves the emphasis. Anteroom sits in the request path of someone
 else's site, and a floating tag plus an image pull policy of `Always` means a
@@ -124,14 +125,14 @@ push, and without the gate it would put an image on the registry that no
 reviewed history contains.
 
 It tests ancestry rather than equality — main moves on after a tag is cut, and a
-tag from last week is still a release. Two consequences worth knowing:
+tag from last week is still a release. One consequence worth stating: **a
+squash-merged commit is refused.** Its original SHA is not in main, so main does
+not contain the tree you tagged, whatever the diff looked like. Tag the commit on
+main, not the branch it came from.
 
-- **A squash-merged commit is refused.** Its original SHA is not in main, so main
-  does not contain the tree you tagged, whatever the diff looked like. Tag the
-  commit on main, not the branch it came from.
-- **A dry run is exempt** (Actions → release → Run workflow with `publish` off).
-  Nothing leaves the runner, so a feature branch is a fine place to test the
-  release path from.
+There is no exemption and no dry run. To exercise the release path without
+publishing, run `make image` and `make acceptance` locally — Tier 0 builds and
+grades the image, which is the part a dry run was checking.
 
 ## Cutting a release
 

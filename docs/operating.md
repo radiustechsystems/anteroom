@@ -557,11 +557,24 @@ cases where it cannot:
   pass the commit in and the linker records it:
 
   ```
-  docker build --build-arg VCS_REF=$(git rev-parse HEAD) -t anteroom .
+  docker build \
+    --build-arg VCS_REF=$(git rev-parse HEAD) \
+    --build-arg VERSION=$(git describe --tags --always --dirty) \
+    -t anteroom .
   ```
 
-  Omitting it is not an error; the gate then reports `revision="unknown"`,
-  which is true.
+  `make image` does exactly this. Omitting either is not an error; the gate then
+  reports `revision="unknown"` or `version="(devel)"`, which is true.
+
+  A **published** image needs neither argument from you: the release workflow
+  passes the git tag it published under, so `version` on a pulled image is a
+  string you can check out. See [`releasing.md`](releasing.md).
+
+  The `-X` paths the Dockerfile passes are built from `go list -m`, not written
+  out. Worth knowing if you ever hand-roll the command: a `-X` path that does not
+  resolve to a real package variable is **silently ignored** — the build
+  succeeds, nothing warns, and the gate reports the toolchain's own guesses as
+  though they were the answer.
 
 Every label is always present, "unknown" where the value is missing — a label
 set that varies between builds is a different series to a scraper, and anything

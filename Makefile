@@ -6,6 +6,12 @@
 
 GO ?= go
 
+# What a local build stamps into anteroom_build_info. The release workflow passes
+# the tag it published under; `git describe` is the closest local equivalent, and
+# it says "-dirty" when the tree is, which is the part worth having.
+VCS_REF ?= $(shell git rev-parse HEAD 2>/dev/null)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+
 .PHONY: help
 help:
 	@echo "check              gofmt, vet, unit tests (fast, no Docker)"
@@ -38,9 +44,14 @@ test:
 build:
 	$(GO) build -trimpath -ldflags="-s -w" -o anteroom ./cmd/anteroom
 
+# The build args matter: .git is out of the build context, so an image built
+# without them cannot say which code it is (Dockerfile, and internal/metrics).
 .PHONY: image
 image:
-	docker build -t anteroom:local .
+	docker build \
+		--build-arg VCS_REF=$(VCS_REF) \
+		--build-arg VERSION=$(VERSION) \
+		-t anteroom:local .
 
 # The tier runs in about two minutes warm. 10m leaves room for cold base-image
 # pulls without letting a wedged bring-up sit there until someone notices.

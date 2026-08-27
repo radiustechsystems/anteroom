@@ -1,8 +1,13 @@
 name: ci
+# `workflow_call` is how release.yaml stops depending on someone remembering to
+# check: it calls this workflow and refuses to publish unless it passes.
+# Everything below is the definition of "verified" for both paths, which is the
+# only reason it is worth calling rather than copying.
 on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

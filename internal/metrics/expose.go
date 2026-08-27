@@ -251,6 +251,21 @@ func RegisterRuntime(r *Registry) {
 // unavailable forever without a way to pass it in.
 var Revision string
 
+// Version overrides the module version the Go toolchain stamps into the binary,
+// set the same way at link time:
+//
+//	-ldflags "-X <module>/internal/metrics.Version=v1.2.3"
+//
+// It exists for the release image. Main.Version is "(devel)" unless the binary
+// was installed as module@version, so a `go build` — which is how every image is
+// built — has no version to report even when one exists: the tag it was
+// published under. The release workflow passes that tag verbatim, so
+// `version="v1.2.3"` on a running gate is a string that can be checked out.
+//
+// A version still does not identify a build; see buildLabels. This narrows the
+// gap between an image tag and the code inside it, and nothing more.
+var Version string
+
 // buildLabels assembles the anteroom_build_info label set.
 //
 // A version does not identify a build. Main.Version is "(devel)" for anything
@@ -286,6 +301,9 @@ func buildLabels() string {
 	// is missing, and "unknown" is the value it is replacing.
 	if Revision != "" {
 		revision = Revision
+	}
+	if Version != "" {
+		version = Version
 	}
 	// Keep the full hash so the revision remains unambiguous as history grows.
 	return fmt.Sprintf("version=\"%s\",revision=\"%s\",revision_time=\"%s\",modified=\"%s\",goversion=\"%s\"",

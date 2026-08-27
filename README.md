@@ -129,6 +129,11 @@ Compose and Kubernetes topologies are in [`docs/docker.md`](docs/docker.md).
 [`examples/anteroomized/`](examples/anteroomized/) is a working deployment used
 by the acceptance suite.
 
+That command takes `:latest`. In front of a real site, pin the digest or a minor
+tag (`:0.4`) — [`docs/releasing.md`](docs/releasing.md) has the tag policy, what
+a version number promises, and how to verify the signature and SBOM the image is
+published with.
+
 ### Behind TLS
 
 WebCrypto and service workers both require a secure context, so Anteroom needs
@@ -192,6 +197,9 @@ transaction signing, and no chain RPC client.
   recovery, monitoring, and HTML injection.
 - [`docs/nginx.md`](docs/nginx.md) — complete nginx topologies and the settings
   that fail quietly if omitted.
+- [`docs/releasing.md`](docs/releasing.md) — what the image tags mean and which
+  ones move, how a beta differs from a release, and how to check that what you
+  pulled is what this repository built.
 - [`docs/docker.md`](docs/docker.md) — the container contract, Compose and
   Kubernetes examples, and container-specific networking traps.
 

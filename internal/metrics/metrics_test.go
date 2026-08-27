@@ -298,3 +298,21 @@ func TestBuildInfoHonoursLinkerRevision(t *testing.T) {
 		t.Errorf("an unset override blanked the revision instead of leaving it: %s", got)
 	}
 }
+
+// Same story for the version, one step removed: the toolchain has a value for
+// it ("(devel)") and that value is useless, so the release workflow passes the
+// published tag. This is what makes an image tag traceable to a commit through
+// /metrics alone.
+func TestBuildInfoHonoursLinkerVersion(t *testing.T) {
+	defer func(prev string) { Version = prev }(Version)
+
+	Version = "v1.2.3-beta.1"
+	if got := buildLabels(); !strings.Contains(got, `version="`+Version+`"`) {
+		t.Errorf("-X override ignored: %s", got)
+	}
+
+	Version = ""
+	if got := buildLabels(); strings.Contains(got, `version=""`) {
+		t.Errorf("an unset override blanked the version instead of leaving it: %s", got)
+	}
+}

@@ -416,6 +416,10 @@ func TestNoAuthHeadersByDefault(t *testing.T) {
 func TestEgressCapBoundsConcurrentFacilitatorCalls(t *testing.T) {
 	var inFlight, peak atomic.Int64
 	release := make(chan struct{})
+	// arrived reports each call that has genuinely reached the facilitator, as
+	// opposed to merely holding an egress slot. The two are not the same
+	// moment, and the difference is what the test has to wait out below.
+	arrived := make(chan struct{}, 2*maxInFlight)
 	f := &facilitator{verify: func(w http.ResponseWriter, r *http.Request) {
 		n := inFlight.Add(1)
 		for {
@@ -424,6 +428,7 @@ func TestEgressCapBoundsConcurrentFacilitatorCalls(t *testing.T) {
 				break
 			}
 		}
+		arrived <- struct{}{}
 		defer inFlight.Add(-1)
 		select {
 		case <-release:
@@ -443,6 +448,23 @@ func TestEgressCapBoundsConcurrentFacilitatorCalls(t *testing.T) {
 	results := make(chan Result, callers)
 	for range callers {
 		go func() { results <- v.Verify(context.Background(), p, reqs()) }()
+	}
+
+	// Wait until the cap's worth of calls is actually held at the facilitator
+	// before reading a single result. A slot is taken before the request
+	// leaves, so the shed answers below can all arrive — and release the
+	// facilitator — while only the first held call has reached the handler.
+	// Measuring peak concurrency at that point measures the scheduler, not the
+	// cap, which is exactly what made this test flaky.
+	for range maxInFlight {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatalf("only %d of %d slot-holding calls reached the facilitator; "+
+				"the cap cannot be measured against a facilitator that was never busy",
+				inFlight.Load(), maxInFlight)
+		}
 	}
 
 	// Every presentation past the cap answers while the first maxInFlight are

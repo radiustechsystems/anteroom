@@ -1,0 +1,25 @@
+# build artifacts
+/anteroom
+/var/
+/dist/
+*.test
+coverage.out
+node_modules/
+test-results/
+anteroom-payments.db
+
+# local env & secrets — never commit
+.env
+.env.*
+*.key
+anteroom.toml
+log/
+run
+
+# editor / OS noise
+.DS_Store
+*~
+.*~
+
+# example deployment secrets
+examples/anteroomized/.env

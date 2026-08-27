@@ -1,0 +1,95 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Track upstream stable rather than the module's floor. Pinning a
+          # patch release here is how CI ends up building on a toolchain with
+          # known advisories months after they were fixed.
+          go-version: stable
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: vet (acceptance)
+        # The acceptance suite is behind a build tag, so `go vet ./...` never
+        # compiles it. Without this a broken harness would sit green until
+        # someone ran the suite by hand.
+        run: go vet -tags e2e ./acceptance/...
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          staticcheck ./...
+      - name: test
+        run: go test -race ./...
+      - name: govulncheck
+        # Catches the case this job exists to prevent: shipping on a toolchain
+        # or dependency with a known, reachable advisory.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
+  go122:
+    # go.mod intentionally keeps the build floor at Go 1.22 for distributions
+    # that do not package a newer toolchain. Release artifacts still use current
+    # Go so they contain current standard-library security fixes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22.x
+      - name: test minimum supported Go
+        run: go test ./...
+
+  acceptance:
+    # Tiers 0 and 1 exercise the image and the deployed gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: docker/setup-buildx-action@v3
+      - name: acceptance (tiers 0-1)
+        run: go test -tags e2e -count=1 -timeout 6m ./acceptance/...
+      - name: leave no containers behind
+        if: always()
+        run: docker ps -a --filter 'name=artest-' -q | xargs -r docker rm -f
+
+  browser:
+    # Real engines cover the service-worker, renewal, and JavaScript fallback
+    # behavior that unit and container-only tests cannot execute.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: acceptance/tier2_browser/package-lock.json
+      - name: install test dependencies
+        working-directory: acceptance/tier2_browser
+        run: npm ci
+      - name: install browser engines
+        working-directory: acceptance/tier2_browser
+        run: npx playwright install --with-deps chromium firefox
+      - name: acceptance (browser tier)
+        working-directory: acceptance/tier2_browser
+        run: npm test
+      - name: leave no containers behind
+        if: always()
+        run: docker ps -a --filter 'name=artier2-' -q | xargs -r docker rm -f

@@ -1,0 +1,15 @@
+{
+  "name": "anteroom-acceptance-browser",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Tier 2 of the Anteroom acceptance suite: the parts only a real browser can answer",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium firefox"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

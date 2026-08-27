@@ -1,0 +1,268 @@
+# anteroom.toml — the whole configuration surface.
+#
+# This file is the public configuration contract.
+# Only `upstream` is required. Environment variables override the file:
+# ANTEROOM_LISTEN, ANTEROOM_ADMIN_LISTEN, ANTEROOM_UPSTREAM, ANTEROOM_HMAC_KEY, ...
+
+listen   = "127.0.0.1:8080"       # bind address. Loopback by default: the documented
+                                  # topology puts a TLS terminator in front, and a gate
+                                  # reachable directly is a gate that can be bypassed
+                                  # by asking the port behind it. Widen to ":8080" only
+                                  # when something else must reach it across a network
+                                  # — a container, or another host.
+                                  # Unprivileged on purpose either way: ports below
+                                  # 1024 need root or CAP_NET_BIND_SERVICE on Linux.
+# admin_listen = "127.0.0.1:8090" # optional operator port: /metrics (Prometheus text
+                                  # exposition — point your scraper here), /stats (the
+                                  # same counters as JSON) and /healthz. Off when unset.
+                                  # UNAUTHENTICATED: reachability is the access control,
+                                  # so keep it on loopback or a private interface —
+                                  # metrics reveal traffic volumes and payment activity.
+                                  # Never proxied, never gated, never shares the gate's
+                                  # port.
+upstream = "127.0.0.1:3000"       # REQUIRED: your real web server. Accepts host:port,
+                                  # an http(s):// URL, or a unix socket as
+                                  # unix:/run/app.sock — gunicorn, puma and uwsgi
+                                  # are commonly packaged listening on one.
+                                  # NOTE: a socket is an HTTP server on a socket.
+                                  # php-fpm speaks FastCGI, not HTTP, so the gate
+                                  # cannot front it directly; see docs/nginx.md.
+
+pass_ttl    = "60s"               # puzzle-earned pass lifetime, renewed in the background.
+                                  # ALSO the solve deadline (a pass expires this long after
+                                  # its challenge was ISSUED, so a solve passed to someone
+                                  # else is worth only the time left on it — which limits
+                                  # stale reuse, not a group actively sharing fresh ones)
+                                  # — keep it above your slowest visitor's solve time.
+max_session = "30m"               # renewals are much cheaper than admission, so the chain is
+                                  # capped: at this age the visitor solves admission again.
+                                  # Must be >= pass_ttl — a cap shorter than a single
+                                  # pass would expire the chain before its first renewal,
+                                  # so the gate rejects it at startup rather than
+                                  # silently making renewal impossible.
+shutdown_grace = "5s"             # in-flight requests may finish after SIGTERM; if raised,
+                                  # raise the container/orchestrator stop timeout too.
+difficulty  = 14                  # admission dial; +1 roughly doubles average solve time
+                                  # (WebCrypto-calibrated: ~1 s on a laptop at 14)
+renew_difficulty = 6              # background renewals; cheap on purpose (mobile battery) —
+                                  # the anti-bot property is liveness + short TTL + max_session,
+                                  # not re-paying admission every few seconds
+
+# pages = "/etc/anteroom/pages"   # optional: your own header.html + footer.html,
+                                  # re-read when they change (edits are live). Leave
+                                  # unset to use the built-in wait page. If set, BOTH
+                                  # files must exist or the gate refuses to start.
+inject = true                     # wholesale toggle: add the renewal script to proxied
+                                  # HTML documents, so a pass stays fresh while the
+                                  # visitor browses. Only 200 text/html document
+                                  # navigations are touched, only when the page's own CSP
+                                  # permits it (see docs/operating.md), and never on a
+                                  # bypassed path. false = never touch upstream bytes;
+                                  # visitors re-solve whenever a pass lapses.
+# Ship a JavaScript SHA-256 so the puzzle works where WebCrypto is unavailable —
+# i.e. any page not served over HTTPS or from localhost, such as a Docker
+# deployment reached at http://192.168.x.y. Off by default: the fallback is
+# 10-50x slower per hash than WebCrypto and that cost falls on the honest
+# visitor, not the attacker. Service workers also need a secure context, so in
+# this mode there is NO background renewal at all: the visitor solves again each
+# time the pass lapses. Fine on a LAN; a downgrade in public.
+allow_insecure_context = false
+
+trusted_proxies = []              # CIDRs whose X-Forwarded-For is believed.
+                                  # REQUIRED when anything terminates TLS in front
+                                  # of Anteroom (nginx, Caddy, a CDN) — see
+                                  # docs/operating.md; forgetting it drops the
+                                  # cookie's Secure flag AND hides the visitor's
+                                  # IP from your application.
+
+# Optional exact HTTP authorities (lowercased; a trailing DNS dot is ignored).
+# Every other Host is refused before challenge, bypass, CORS, payment, or proxy.
+# Include a non-default port when it is part of the public URL.
+#public_hosts = ["example.com", "staging.example.com:8443"]
+
+# Cookie/challenge signing keys. One entry is normal; more enable rotation
+# (the first key signs; the rest still verify). Auto-generated when absent —
+# fleets MUST configure the same key(s) on every instance. Generate a unique
+# deployment key with `openssl rand -base64 32`; never publish or reuse it.
+#[[hmac_keys]]
+#kid = "k1"
+#key = "base64..."
+
+# ---------------------------------------------------------------------------
+# Challenge-activity log (optional). Omit this whole section to keep the gate
+# fully free of per-visitor state. When set, the admin listener (admin_listen
+# must also be set for it to be reachable) serves GET /activity: a JSON list
+# of client IPs with cumulative challenge counts (failed, succeeded_admit,
+# succeeded_renew — see docs/operating.md for reading the shapes), for an
+# EXTERNAL tool (iptables auto-banner, Cloudflare script) to poll. Anteroom
+# itself never judges or bans anyone; a banned IP stops reaching the gate and
+# ages out of the list on its own. See docs/operating.md.
+# ---------------------------------------------------------------------------
+#[activity]
+#ttl     = "10m"   # drop an IP after this much quiet; poll faster than this
+#max_ips = 8192    # hard memory bound; past it the quietest IP is evicted
+
+# ---------------------------------------------------------------------------
+# Payments (optional). Omit this whole section for a puzzle-only gate.
+# Anteroom is non-custodial: pay_to is your PUBLIC receiving address; it is
+# REQUIRED to enable payments and is never generated for you. The gate never
+# holds keys or funds.
+# ---------------------------------------------------------------------------
+[payments]
+pay_to      = "0xYourWalletAddress"      # your PUBLIC receiving address
+facilitator = "https://facilitator.testnet.radiustech.xyz"
+#facilitator_headers = ["Authorization: Bearer ${FACILITATOR_API_KEY}"]
+                                         # extra headers on every facilitator call,
+                                         # for hosted facilitators that want an API
+                                         # key. ${VAR} is expanded from the
+                                         # environment at load; an unset variable
+                                         # REFUSES TO START, because a facilitator
+                                         # that needs a key and silently doesn't get
+                                         # one fails on every settlement instead —
+                                         # a worse place to find the typo. Values
+                                         # are never logged.
+# Durable payment-to-grant records. A relative path is resolved beside this
+# config file; omitted defaults to "anteroom-payments.db" there. Containers
+# with a read-only /etc must set this to the mounted writable state volume:
+# state_file = "/var/lib/anteroom/payments.db"
+max_timeout_seconds  = 300               # required wire field; sized so ordinary
+                                         # clock skew never voids a fresh payment
+resource_description = "Protected content"   # shown to agents in the 402 offer
+
+# Rails: the ways a client may pay. Each becomes one accepts[] entry in the 402.
+#
+# OFFER MORE THAN ONE. An x402 client filters accepts[] down to the networks its
+# wallet actually registered and pays the first survivor — so a gate that offers
+# only one exotic rail is unpayable by most wallets, however conformant it is.
+# Notably, the widely-deployed hosted agent wallets today hold funds on Base and
+# Solana only; a Base rail alongside your preferred rail is the difference
+# between those agents paying you and bouncing.
+[[payments.rails]]
+network       = "eip155:72344"           # CAIP-2. Radius testnet.
+asset         = "0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb"   # SBC
+decimals      = 6
+asset_name    = "Stable Coin"            # the TOKEN's EIP-712 domain, advertised
+asset_version = "1"                      # as extra.name/extra.version. REQUIRED:
+                                         # clients throw without it. These values
+                                         # match x402 upstream's asset table.
+asset_transfer_method = "permit2"        # "eip3009" (default) or "permit2".
+                                         # Radius SBC needs permit2. ("erc7710" is
+                                         # in the spec but unimplemented, so it is
+                                         # rejected rather than advertised.)
+                                         #
+                                         # NOTE, and it is the difference between a
+                                         # payer succeeding and giving up: permit2
+                                         # needs a ONE-TIME ERC-20 approval of the
+                                         # Permit2 contract per token per wallet.
+                                         # Without it a correctly signed payment
+                                         # from a funded wallet is rejected, and the
+                                         # facilitator's reason does not say why.
+                                         # The gate advertises this prerequisite in
+                                         # every 402 so payers are not left guessing.
+rpc_url = "https://rpc.testnet.radiustech.xyz"
+                                         # optional, and worth setting. The gate
+                                         # never calls it — no chain RPC client, by
+                                         # invariant — it is published so a payer
+                                         # can run the approval above without first
+                                         # having to discover where the chain lives.
+                                         # A CAIP-2 id names a chain; it does not say
+                                         # how to reach one. Measured: an agent given
+                                         # everything else spent more time hunting an
+                                         # RPC URL than on all other steps combined.
+#[[payments.rails]]
+#network       = "eip155:8453"            # Base mainnet
+#asset         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"   # USDC
+#decimals      = 6
+#asset_name    = "USD Coin"
+#asset_version = "2"
+#asset_transfer_method = "eip3009"
+#pay_to        = "0xDifferentAddress"     # optional per-rail override
+#facilitator   = "https://your-base-facilitator.example"
+                                          # optional per-rail override: this rail
+                                          # settles through its own facilitator
+                                          # (e.g. Coinbase's for Base) while other
+                                          # rails keep the [payments] default. Each
+                                          # distinct facilitator gets its own
+                                          # circuit breaker and boot preflight, so
+                                          # one being down degrades only its rails.
+#facilitator_headers = ["Authorization: Bearer ${CDP_API_KEY}"]
+                                          # credentials for THIS rail's facilitator.
+                                          # Inheritance is all-or-nothing: a rail
+                                          # with no facilitator inherits the global
+                                          # URL AND the global headers; a rail with
+                                          # its own facilitator gets only its own
+                                          # headers — the global credential is never
+                                          # sent to a different facilitator's host.
+                                          # Setting headers without facilitator is a
+                                          # config error for the same reason.
+
+# WHAT A PRICE DOES NOT DO. Read this before pricing anything.
+#
+# A price is an alternative to the puzzle, not a wall in front of the route. The
+# free proof-of-work door mints a pass scoped "*", and a "*" scope opens every
+# route on the site including the priced ones. So the rule below does not make
+# /reports/* cost $2.50; it makes /reports/* cost $2.50 OR one puzzle solve, and
+# the 402 the gate emits advertises the free door first and by name.
+#
+# That is the design — Anteroom sells admission at two prices, cash or compute,
+# and the puzzle exists so humans are never asked to pay. It is written down
+# here because an operator reading only this file would reasonably assume
+# otherwise, and would be wrong about their own revenue.
+#
+# If you need a route that payment alone opens, Anteroom cannot express that
+# today.
+
+# Per-route pricing rules, evaluated in order; first path match wins.
+# One display price per rule, resolved to atomic units once per rail.
+# A paid pass is SCOPED to the rule that minted it.
+[[payments.rules]]
+name      = "site"                # scope name recorded in the pass
+paths     = ["/*"]
+price     = "$0.01"               # resolved per rail using that rail's decimals.
+                                  # NOTE what the dollar sign does NOT mean: there is
+                                  # no exchange rate anywhere in the gate. "$0.01" at
+                                  # six decimals becomes 10000 atomic units of
+                                  # whatever that rail's asset is, so the price is
+                                  # only in dollars if the asset is worth a dollar.
+                                  # Price volatile assets in their own units and know
+                                  # what you are selling.
+paid_ttl  = "1h"
+
+# A narrow, separately priced rule. Its scope comes from `paths`.
+#[[payments.rules]]
+#name     = "reports"
+#paths    = ["/reports/*"]
+#price    = "$2.50"
+#paid_ttl = "24h"
+
+# ---------------------------------------------------------------------------
+# Bypass: traffic that must never be challenged.
+# ---------------------------------------------------------------------------
+[bypass]
+paths    = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*"]
+cidrs    = []                         # always-allowed ranges (offices, monitors)
+
+# ---------------------------------------------------------------------------
+# Triage: how non-browser clients receive the payment offer.
+# Default: 402 status + PAYMENT-REQUIRED header + markdown body.
+# ---------------------------------------------------------------------------
+[triage]
+json_accept    = true             # Accept: application/json → JSON 402 body
+ok_body_agents = ["claude-user"]  # user agents of fetch tools that discard non-2xx
+                                  # bodies (measured); these receive the markdown
+                                  # with status 200, the only status they surface.
+                                  # Matched case-insensitively as a UA substring.
+
+# The binary also serves /.anteroom/healthz (liveness), /.anteroom/renew.js (the
+# injected renewal script) and /.anteroom/uninstall (removes the renewal service
+# worker from a browser). Metrics live on their own port behind `admin_listen`
+# (off by default, above); there is still no dashboard and no telemetry — the
+# gate exposes counters for YOUR scraper and phones home to nobody.
+#
+# Run with -v to log one line per request naming which rung of the ladder answered
+# it; useful when a request is being walled and you want to know why.
+#
+# Before going live, read docs/operating.md — it lists what Anteroom breaks
+# without bypass rules (webhooks, OAuth callbacks, API clients, feeds, link
+# previews, iframe embeds) and the deployment prerequisites (HTTPS for WebCrypto,
+# shared hmac_keys across a fleet, no competing root-scope service worker).

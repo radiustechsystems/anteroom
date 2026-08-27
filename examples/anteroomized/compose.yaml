@@ -1,0 +1,62 @@
+# Anteroom in front of hello-app: the sidecar topology.
+#
+# The shape is the whole point and it is two rules:
+#   1. the gate is the only service that publishes a port;
+#   2. the app binds inside the compose network and is never mapped to the host.
+#
+# Verify rule 2 rather than trusting it — `docker compose ps` should show a
+# host port for `anteroom` and none for `app`. An app that is still reachable
+# on its own port has a gate standing decoratively beside it, not in front.
+
+services:
+  anteroom:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: anteroom:local
+    ports:
+      # host:container. The gate binds 8080 as an unprivileged user; the daemon
+      # owns the host side, so no capability is needed in the image. In
+      # production this is usually "80:8080".
+      - "${GATE_PORT:-8080}:8080"
+    volumes:
+      # Read-only: the gate never writes its config, and a container that cannot
+      # modify its own policy is one less thing to reason about.
+      - ./anteroom.toml:/etc/anteroom/anteroom.toml:ro
+      # The wait page. Both files must exist or the gate refuses to start —
+      # deliberately, since a half-configured wait page is a blank interstitial.
+      # Edits here are live on the next challenge; no restart, no rebuild.
+      - ./pages:/etc/anteroom/pages:ro
+      # Required when payments are enabled. Harmless for this PoW-only example,
+      # and keeps the read-only-root topology ready for a payments block.
+      - anteroom_state:/var/lib/anteroom
+    environment:
+      # Service name, not localhost: in compose the app is a different host.
+      - ANTEROOM_UPSTREAM=app:3000
+      # The signing key. Passes are stateless signed cookies, so this is the
+      # only shared state a fleet needs — and the only secret here. Without it
+      # a key is generated per process: passes die on every restart and no
+      # second replica can verify them. Supplied from .env; see README.md.
+      - ANTEROOM_HMAC_KEY=${ANTEROOM_HMAC_KEY:?set ANTEROOM_HMAC_KEY — see README.md}
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build: ../hello-app
+    image: hello-app:local
+    # `expose`, not `ports`: reachable from the compose network, never from the
+    # host. This line is the security boundary.
+    expose:
+      - "3000"
+    environment:
+      - HELLO_LISTEN=:3000
+    restart: unless-stopped
+
+volumes:
+  anteroom_state:

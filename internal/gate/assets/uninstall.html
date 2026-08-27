@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Remove the Anteroom helper</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+           justify-content: center; background: #f6f4ef; color: #1d232b;
+           font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+           Roboto, Helvetica, Arial, sans-serif; }
+    main { max-width: 30rem; padding: 2.5rem 2rem; }
+    h1 { font-size: 1.3rem; margin: 0 0 .6rem; }
+    p { color: #4a5462; }
+    #status { margin-top: 1.2rem; font-weight: 600; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Remove the Anteroom helper</h1>
+  <p>Anteroom registers a small background helper (a service worker) that keeps
+     your browser's pass fresh so you don't see the waiting page repeatedly.
+     This page removes it. Nothing else on this site is affected.</p>
+  <div id="status">Removing…</div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var el = document.getElementById("status");
+  if (!("serviceWorker" in navigator)) {
+    el.textContent = "Nothing to remove — this browser has no service workers.";
+    return;
+  }
+  navigator.serviceWorker.getRegistrations().then(function (regs) {
+    var mine = regs.filter(function (r) {
+      return r.scope.indexOf("/.anteroom/") !== -1;
+    });
+    if (!mine.length) {
+      el.textContent = "Nothing to remove — no Anteroom helper is registered.";
+      return;
+    }
+    return Promise.all(
+      mine.map(function (r) {
+        // Tell it to stand down first. Unregistration only completes once every
+        // controlled client is gone, so without this the worker keeps renewing
+        // until this page is closed — "removed" would be a lie for as long as
+        // the visitor is still reading it.
+        var w = r.active || r.waiting || r.installing;
+        if (w) w.postMessage({ type: "stop" });
+        return r.unregister();
+      }),
+    ).then(function () {
+      el.textContent = "Removed. You can close this page.";
+    });
+  }).catch(function (err) {
+    el.textContent = "Could not remove it: " + (err && err.message ? err.message : err);
+  });
+})();
+</script>
+</body>
+</html>

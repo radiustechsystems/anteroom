@@ -1,0 +1,73 @@
+package gate
+
+import (
+	"net/http"
+
+	"github.com/radiustechsystems/anteroom/internal/activity"
+)
+
+// Activity exposes the challenge-activity log for the admin server, mirroring
+// Metrics(). Nil when the [activity] section is unconfigured; the admin
+// endpoint answers 404 for a nil log.
+func (g *Gate) Activity() *activity.Log { return g.activity }
+
+// walledDecisions are the ladder rungs that mean "this IP asked for content
+// and was walled": the wait page, the machine-readable refusal, and the 402 on
+// a paid route. Deliberately only these three — admitted and bypassed traffic
+// must never touch the log (the log records challenge activity, not visits),
+// and the pay-* outcomes describe a client already attempting to pay, which
+// the payment limiter and breaker govern.
+var walledDecisions = map[string]bool{
+	"wait-page":        true,
+	"refusal":          true,
+	"payment-required": true,
+}
+
+// recordDecision is the ladder-side activity hook, one call per request from
+// ServeHTTP. Challenge-answer outcomes never reach it — they hide behind the
+// "own-endpoint" decision and are recorded by noteAnswer instead.
+func (g *Gate) recordDecision(decision string, r *http.Request) {
+	if g.activity == nil || !walledDecisions[decision] {
+		return
+	}
+	// An unresolvable client is skipped, not bucketed under a sentinel key
+	// (contrast the payment limiter's fail-closed "unresolved-client"): the
+	// limiter withholds a grant, but this log's consumer is a firewall, and a
+	// sentinel entry is nothing it can act on. On a TCP listener the branch is
+	// theoretical anyway — every real request has a parseable peer.
+	if ip, err := g.match.ClientIP(r); err == nil {
+		g.activity.RecordFailure(ip.String())
+	}
+}
+
+// noteAnswer records each challenge outcome in metrics and, when enabled, the
+// activity log.
+//
+// "error" is deliberately in neither set — it is the gate failing to mint,
+// not the client failing to solve, and a server fault must never edge an IP
+// toward someone's ban threshold.
+func (g *Gate) noteAnswer(outcome string, r *http.Request) {
+	g.met.answers.With(outcome).Inc()
+	if g.activity == nil {
+		return
+	}
+	var record func(string)
+	switch outcome {
+	case "malformed", "stale", "bad_pow", "window_elapsed":
+		record = g.activity.RecordFailure
+	// Successes stay split by challenge kind: admissions and renewals mean
+	// opposite things about the client (see activity.Entry), and collapsing
+	// them is what made solve loops indistinguishable from idle browsers.
+	case "ok_admit":
+		record = g.activity.RecordAdmit
+	case "ok_renew":
+		record = g.activity.RecordRenew
+	default:
+		return
+	}
+	ip, err := g.match.ClientIP(r)
+	if err != nil {
+		return
+	}
+	record(ip.String())
+}

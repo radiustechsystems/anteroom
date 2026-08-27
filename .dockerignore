@@ -1,0 +1,30 @@
+# Everything the build does not need. Keeping the context small is not just
+# speed: the build stage COPYs the whole tree, and anything reachable there can
+# end up in an intermediate layer.
+
+.git
+.github
+.gitignore
+
+# build artifacts
+/anteroom
+/var/
+/dist/
+*.test
+coverage.out
+
+# local env & secrets — never near a build context
+.env
+.env.*
+*.key
+anteroom.toml
+
+# docs and examples: not inputs to the binary
+*.md
+docs/
+examples/
+acceptance/
+LICENSE
+
+# editor / OS noise
+.DS_Store

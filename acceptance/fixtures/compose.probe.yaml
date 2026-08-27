@@ -1,0 +1,14 @@
+# A test-only overlay that also publishes the application directly.
+#
+# It exists for exactly one purpose: byte-identity. To prove the gate forwards a
+# response unchanged, the suite has to fetch the same path both through the gate
+# and from the application, and diff them.
+#
+# This overlay deliberately violates the deployment's central rule — that the
+# app is unreachable from the host — so it is never part of a real deployment
+# and never used by the test that checks that rule (T1.0/G2), which runs against
+# the base compose file alone.
+services:
+  app:
+    ports:
+      - "${APP_PORT:-13000}:3000"

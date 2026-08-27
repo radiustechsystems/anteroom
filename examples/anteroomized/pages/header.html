@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>One moment&hellip; — hello-app</title>
+
+  <!-- Open Graph tags belong HERE, not only on your real pages. A link
+       unfurler (Slack, Discord, X) does not run JavaScript, so it sees this
+       interstitial and caches whatever it finds for days. Without these tags
+       every shared link previews as "Pardon us for a moment". -->
+  <meta property="og:title" content="hello-app">
+  <meta property="og:description" content="A small demonstration web service.">
+  <meta property="og:type" content="website">
+
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+           justify-content: center; background: #f6f4ef; color: #1d232b;
+           font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+           Roboto, Helvetica, Arial, sans-serif; }
+    main { max-width: 26rem; padding: 2.5rem 2rem; text-align: center; }
+    h1 { font-size: 1.35rem; margin: 0 0 .6rem; }
+    p { margin: .4rem 0; color: #4a5462; }
+    #anteroom-status { margin-top: 1.4rem; font-size: .9rem; color: #6b7686;
+                       font-variant-numeric: tabular-nums; }
+    noscript { display: block; margin-top: 1.4rem; color: #8a3324; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Pardon us for a moment&hellip;</h1>
+  <p>We&rsquo;re confirming your browser. This takes about a second and
+     there&rsquo;s nothing to click.</p>
+
+  <!-- The solver writes progress here if the element exists. It is optional;
+       without it the page simply sits still until the reload. -->
+  <div id="anteroom-status">Starting&hellip;</div>
+
+  <noscript>This check needs JavaScript. If you cannot enable it, the site
+    operator can exempt specific paths from the gate.</noscript>

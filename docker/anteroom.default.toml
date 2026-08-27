@@ -1,0 +1,63 @@
+# The config baked into the container image.
+#
+# It exists so the image can start from environment variables alone: every key
+# here is the built-in default, and `upstream` — the one required key — is
+# deliberately absent, to be supplied by ANTEROOM_UPSTREAM. Starting without it
+# fails loudly, which is correct: a gate with no upstream has nothing to guard.
+#
+# Mounting your own file over /etc/anteroom/anteroom.toml replaces this one
+# entirely. See docs/docker.md for the container contract and
+# anteroom.example.toml for the annotated full surface.
+
+listen = ":8080"           # publish as -p 80:8080; the daemon owns the privileged half
+
+# admin_listen = "127.0.0.1:8090"
+#                          # optional operator port: Prometheus /metrics, JSON /stats,
+#                          # /healthz. Off by default. Loopback is container-local —
+#                          # right for a sidecar scraper in the same network namespace.
+#                          # An external Prometheus needs ":8090" instead, published
+#                          # ONLY onto a trusted monitoring network: the port is
+#                          # unauthenticated and reveals traffic and payment volumes.
+
+pass_ttl    = "60s"
+max_session = "30m"
+difficulty  = 14
+renew_difficulty = 6
+shutdown_grace = "5s"
+inject = true
+
+# READ THIS BEFORE DEPLOYING ON A LAN.
+#
+# WebCrypto and service workers both require a secure context, which means HTTPS
+# or localhost. A container reached at http://192.168.x.y:8080 has neither, so
+# with this off every visitor is walled permanently — the puzzle cannot run at
+# all. Two ways out, and only two:
+#
+#   - put a TLS terminator in front and set trusted_proxies (the real fix), or
+#   - set allow_insecure_context = true, accepting a JavaScript SHA-256 that is
+#     10-50x slower per hash, with that cost falling on the honest visitor.
+#
+# ANTEROOM_UPSTREAM has an environment override; this does not. It is a posture
+# decision, so it is made in a file someone reviewed.
+allow_insecure_context = false
+
+# REQUIRED when anything terminates TLS in front of the gate — and note that a
+# container network counts as "in front": the peer address the gate sees is the
+# bridge, not the visitor. Getting this wrong costs the cookie's Secure flag,
+# hides real client IPs from your application, and silently disables CIDR
+# bypass. See docs/docker.md.
+trusted_proxies = []
+
+# No [[hmac_keys]] here on purpose: a key committed to an image is a published
+# key. Absent, one is generated per process and the gate warns about it at
+# startup — fine for a first run, wrong for anything else, because passes die on
+# every restart and no second replica can verify them. Supply a real one via
+# ANTEROOM_HMAC_KEY (a Docker/Kubernetes secret) or a mounted config.
+
+[bypass]
+paths    = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*"]
+cidrs    = []
+
+[triage]
+json_accept    = true
+ok_body_agents = ["claude-user"]

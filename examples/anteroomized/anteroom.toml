@@ -75,7 +75,7 @@ paths = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*", "/webhook
 cidrs = []
 
 [triage]
-# Accept: application/json earns a machine-readable 402/401 body instead of the
+# Accept: application/json earns a machine-readable 402/403 body instead of the
 # markdown one.
 json_accept    = true
 # User agents of fetch tools that discard the body of any non-2xx response. For

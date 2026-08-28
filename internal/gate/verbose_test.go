@@ -65,13 +65,13 @@ func TestVerboseLogsTheRungThatAnswered(t *testing.T) {
 			name:     "walled browser",
 			request:  func(*http.Cookie) *http.Request { return browserReq("/page") },
 			decision: "wait-page",
-			status:   "200",
+			status:   "403",
 		},
 		{
 			name:     "refused agent",
 			request:  func(*http.Cookie) *http.Request { return agentReq("/page") },
 			decision: "refusal",
-			status:   "401",
+			status:   "403",
 		},
 		{
 			name:     "bypassed path",

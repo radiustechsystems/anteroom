@@ -66,7 +66,7 @@ the rung of the ladder that answered each request, which is usually the whole
 answer:
 
 ```
-level=DEBUG msg=hit method=GET path=/ decision=wait-page status=200 dur=1.2ms
+level=DEBUG msg=hit method=GET path=/ decision=wait-page status=403 dur=1.2ms
 ```
 
 Stale projects from an interrupted run:

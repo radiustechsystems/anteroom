@@ -128,7 +128,7 @@ kubectl -n hello get configmap anteroom-config secret anteroom
 # pass gets the machine-readable refusal, not hello-app's HTML.
 kubectl -n hello run probe --rm -it --restart=Never --image=curlimages/curl \
   -- -si http://hello-app.hello.svc/ | head -1
-# HTTP/1.1 401 Unauthorized
+# HTTP/1.1 403 Forbidden
 ```
 
 Then see it as a visitor — the script's port-forward is already running, or

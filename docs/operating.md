@@ -34,7 +34,7 @@ until you configure around it.
    **What went wrong.** A worker with a catch-all `fetch` handler that re-issues
    requests (`e.respondWith(fetch(e.request))`) causes the browser to rewrite the
    navigation's fetch metadata. Anteroom read that metadata literally, concluded
-   the request was machine traffic, and served the `401` refusal — which carries
+   the request was machine traffic, and served the `403` refusal — which carries
    no solver, so the visitor could never earn a pass. Permanent, silent, and only
    on Firefox, so a developer testing in Chromium saw nothing wrong.
 
@@ -88,9 +88,9 @@ until you configure around it.
    load-bearing, because getting it wrong is not recoverable by the visitor.
 
    A browser re-fetches a worker's script to check for updates. If that path is
-   gated, a visitor without a pass gets `401` — and a failed update check does
+   gated, a visitor without a pass gets `403` — and a failed update check does
    **not** drop the registration. Measured in both Chromium and Firefox: a
-   registration survives a `401` on its script, and survives a `404` too. So a
+   registration survives a `403` on its script, and survives a `404` too. So a
    worker installed once keeps running, and you cannot ship it a fix to anyone
    whose pass has lapsed.
 
@@ -239,6 +239,11 @@ for a renewal. Two constraints worth knowing:
 Anything that is not a browser navigation gets a machine-readable refusal rather
 than the wait page. That is correct for scrapers and wrong for several things you
 probably run. Each of these needs a `bypass` rule.
+
+Both the wait page and machine refusal use `403`: browsers still render the
+interstitial, while clients, caches, and crawlers cannot mistake it for the
+requested resource. Every such response is also marked `Cache-Control: no-store`
+and `X-Anteroom-Action: challenge`.
 
 | What breaks | Why | Fix |
 |---|---|---|

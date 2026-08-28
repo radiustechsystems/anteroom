@@ -28,7 +28,7 @@ Check that the gate is actually in the path:
 
 ```sh
 docker compose ps          # `app` must show no host port
-curl -s localhost:8080/    # 401 with instructions, not the app's HTML
+curl -s localhost:8080/    # 403 with instructions, not the app's HTML
 ```
 
 ## What is in here

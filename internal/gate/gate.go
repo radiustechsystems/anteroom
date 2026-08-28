@@ -287,6 +287,12 @@ func newProxy(u *url.URL, socket string, m *bypass.Matcher, lg *slog.Logger, ups
 			// Host, not ours.
 			r.Out.Host = r.In.Host
 		},
+		ModifyResponse: func(r *http.Response) error {
+			// This response marker belongs to the gate. An upstream copy would
+			// make ordinary application content look like an interdiction.
+			r.Header.Del(actionHeader)
+			return nil
+		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			upstreamErr.Inc()
@@ -353,6 +359,7 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	// Strip headers the gate itself authors: an inbound copy is a forgery
 	// attempt, and the upstream must only ever see ours.
 	r.Header.Del("X-Anteroom-Status")
+	r.Header.Del(actionHeader)
 	// Also gate-authored, and both are response headers: an inbound copy is a
 	// forgery attempt. PAYMENT-REQUIRED matters as much as PAYMENT-RESPONSE —
 	// an upstream that logs or echoes one would be quoting an offer with a

@@ -1,0 +1,146 @@
+{{- /*
+Inject the gate into any pod that asks for it.
+
+Kyverno and Helm share the {{ ... }} delimiters; every expression Kyverno
+must see at admission time is wrapped in a Helm raw string — {{ `{{ ... }}` }}
+— so it survives templating verbatim.
+*/ -}}
+{{- if .Values.policies.injectSidecar }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: inject-anteroom-sidecar
+  labels:
+    {{- include "kyverno-policies.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Inject Anteroom sidecar
+    policies.kyverno.io/category: Anteroom
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Injects an Anteroom proof-of-work gate as a sidecar proxy container
+      into pods labeled anteroom.radiustech.xyz/inject=enabled, proxying to
+      the port named by the anteroom.radiustech.xyz/upstream-port annotation.
+    # Mutate the POD, not the workload that owns it. By default Kyverno
+    # auto-generates counterpart rules that would rewrite the Deployment's own
+    # template at admission — which works, but then every `kubectl diff`, Argo
+    # sync, and Flux reconcile sees a resource that no longer matches its
+    # manifest and tries to fight the policy. Pod-level mutation keeps the
+    # committed manifests clean; the injected container is visible where it
+    # runs (`kubectl get pod -o yaml`), which is also where you debug it.
+    pod-policies.kyverno.io/autogen-controllers: none
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    # Rule 1: a pod that opts in must say where its app listens. An admission
+    # ERROR rather than a guessed default, for the same reason the binary
+    # treats an unknown config key as a startup error: a gate proxying to the
+    # wrong port fails as "the site is down", which is a worse place to find
+    # the typo.
+    - name: require-upstream-port
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/inject: enabled
+      validate:
+        message: >-
+          Pods labeled anteroom.radiustech.xyz/inject=enabled must carry the
+          annotation anteroom.radiustech.xyz/upstream-port naming the port the
+          application container listens on (e.g. "3000"). The gate will not
+          guess: proxying to the wrong port fails as "the site is down".
+        pattern:
+          metadata:
+            annotations:
+              anteroom.radiustech.xyz/upstream-port: "?*"
+
+    # Rule 2: the injection itself.
+    - name: inject-gate
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/inject: enabled
+      preconditions:
+        all:
+          # Admission runs mutation before validation, so without this guard a
+          # pod missing the annotation would die inside this rule with a
+          # variable-substitution error instead of reaching rule 1's message.
+          # Skipping here lets validation deny it legibly.
+          - key: {{ `"{{ request.object.metadata.annotations.\"anteroom.radiustech.xyz/upstream-port\" || '' }}"` }}
+            operator: NotEquals
+            value: ""
+          # Idempotence: a pod that already carries the gate (hand-written, or
+          # admitted before a policy change) is left alone rather than given a
+          # second one that would fight the first for :8080. No null guard
+          # needed: containers is a required field, so the filter always has a
+          # list to work on.
+          - key: {{ `"{{ request.object.spec.containers[?name=='anteroom'] | length(@) }}"` }}
+            operator: Equals
+            value: 0
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - name: anteroom
+                image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                imagePullPolicy: {{ .Values.image.pullPolicy }}
+                ports:
+                  # The NAME is load-bearing: the companion Service policy
+                  # rewrites every Service targetPort to "anteroom", and a
+                  # named targetPort resolves to whatever containerPort carries
+                  # the name — so the Service needs no knowledge of the number.
+                  - name: anteroom
+                    containerPort: 8080
+                env:
+                  # 127.0.0.1, not a service name: containers in a pod share a
+                  # network namespace. This is the line that differs from the
+                  # Compose sidecar and the single most common copy-paste error
+                  # between the two (docs/docker.md).
+                  - name: ANTEROOM_UPSTREAM
+                    value: {{ `"127.0.0.1:{{ request.object.metadata.annotations.\"anteroom.radiustech.xyz/upstream-port\" }}"` }}
+                  # The signing key. Passes are stateless signed cookies, so
+                  # this is the only shared state the fleet needs — and every
+                  # replica MUST get the same key or each gate walls the
+                  # others' visitors.
+                  - name: ANTEROOM_HMAC_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: {{ .Values.secretName }}
+                        key: hmac-key
+                volumeMounts:
+                  # Replaces the image's default config wholesale. Edits to
+                  # the generated ConfigMap are synced into the pod by the
+                  # kubelet within about a minute, though the gate reads
+                  # anteroom.toml only at startup — a policy change needs a
+                  # rollout.
+                  - name: anteroom-config
+                    mountPath: /etc/anteroom
+                    readOnly: true
+                livenessProbe:
+                  httpGet:
+                    path: /.anteroom/healthz
+                    port: anteroom
+                  periodSeconds: 10
+                readinessProbe:
+                  # Readiness is what sequences traffic: until the gate
+                  # answers, the pod is not Ready and the Service sends it
+                  # nothing — no window where traffic routes to a pod whose
+                  # gate is absent.
+                  httpGet:
+                    path: /.anteroom/healthz
+                    port: anteroom
+                  periodSeconds: 5
+                resources:
+                  {{- toYaml .Values.sidecar.resources | nindent 18 }}
+                securityContext:
+                  {{- toYaml .Values.sidecar.securityContext | nindent 18 }}
+            volumes:
+              - name: anteroom-config
+                configMap:
+                  name: {{ .Values.configMapName }}
+{{- end }}

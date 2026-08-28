@@ -1,0 +1,61 @@
+{{- /*
+Point the Service at the gate instead of the app.
+
+Injection alone changes nothing about routing: the Service still resolves its
+targetPort against the app container and traffic flows past the gate, which
+is then standing decoratively beside the app rather than in front of it.
+
+Why the Service opts in with its own label instead of inheriting the pods':
+at admission time a Service is just a selector — Kyverno cannot know which
+pods it will match, or whether those pods opted into injection. Guessing
+would rewrite Services whose pods have no gate, and a targetPort naming a
+port no container carries blackholes the Service.
+
+Deliberately blunt: EVERY port is rewritten. A Service that also exposes a
+side channel (gRPC, a metrics port) should not carry the label — split the
+HTTP port into its own labeled Service instead. The gate proxies HTTP; it is
+not a general TCP proxy.
+*/ -}}
+{{- if .Values.policies.routeService }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: route-service-through-anteroom
+  labels:
+    {{- include "kyverno-policies.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Route Service traffic through Anteroom
+    policies.kyverno.io/category: Anteroom
+    policies.kyverno.io/subject: Service
+    policies.kyverno.io/description: >-
+      Rewrites the targetPort of every port on Services labeled
+      anteroom.radiustech.xyz/proxied=enabled to the named port "anteroom", so
+      cluster traffic reaches the injected gate rather than the application
+      container directly.
+spec:
+  rules:
+    - name: retarget-ports
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/proxied: enabled
+      mutate:
+        foreach:
+          - list: "request.object.spec.ports"
+            # The NAMED targetPort is the trick that decouples this policy
+            # from the injection policy: the name resolves per-pod to
+            # whatever containerPort carries it, so neither policy needs the
+            # other's numbers, and a Service admitted before its pods were
+            # injected routes correctly the moment they are.
+            #
+            # JSON-Patch "add" both sets and replaces, which matters here: a
+            # port with no explicit targetPort has no path for "replace" to
+            # touch (it defaults to port at resolution time, not in the spec).
+            patchesJson6902: |-
+              - path: {{ `/spec/ports/{{ elementIndex }}/targetPort` }}
+                op: add
+                value: anteroom
+{{- end }}

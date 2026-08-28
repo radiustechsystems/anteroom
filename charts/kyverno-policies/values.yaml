@@ -1,0 +1,156 @@
+# Values for the anteroom kyverno-policies chart.
+#
+# The `# --` comments are load-bearing: helm-docs assembles README.md from
+# them. Edit here, then regenerate with `make helm-docs`.
+
+image:
+  # -- Gate image injected into opted-in pods.
+  repository: ghcr.io/radiustechsystems/anteroom
+  # -- Tag or digest of the gate image. `latest` is right for trying this and
+  # wrong in front of a real site — a pod reschedule can change the gate. Pin
+  # a digest or a minor version in production (docs/docker.md, "Which tag").
+  tag: latest
+  # -- Deliberately IfNotPresent, not the Always a `latest` tag would default
+  # to: Always makes every pod start a registry round-trip and ignores images
+  # loaded directly onto nodes (`kind load`, air-gapped mirrors). With a
+  # pinned digest the two behave identically.
+  pullPolicy: IfNotPresent
+
+policies:
+  # -- Create the pod-mutating policy that injects the gate sidecar.
+  injectSidecar: true
+  # -- Create the Service-mutating policy that rewrites every port's
+  # targetPort to the gate's named port.
+  routeService: true
+  # -- Create the generate rule that provisions the per-namespace ConfigMap
+  # holding `gateConfig` below.
+  generateConfig: true
+
+sidecar:
+  # -- Compute for the injected gate: one binary proxying one app, so modest
+  # on purpose. The limit is memory only — a CPU limit would throttle the
+  # proxy path under the exact load the gate exists to absorb.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  # -- The gate's image is distroless, non-root, and needs nothing; say so
+  # where the admission controller can hold it to that.
+  securityContext:
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+
+# -- Name of the per-namespace ConfigMap the generate policy creates and the
+# injected sidecar mounts at /etc/anteroom.
+configMapName: anteroom-config
+
+# -- Name of the per-namespace Secret the sidecar reads ANTEROOM_HMAC_KEY
+# from (key `hmac-key`). With `hmacSecret.clone` off, create a Secret with
+# this name and key in every opted-in namespace yourself.
+secretName: anteroom
+
+hmacSecret:
+  # -- Clone the signing-key Secret into every opted-in namespace. One key
+  # cluster-wide is the simple default and what makes any two replicas of the
+  # same gate verify each other's passes; its cost is that every namespace
+  # holds the same secret. If namespaces are your isolation boundary, disable
+  # this and create per-namespace Secrets by hand.
+  clone: true
+  # -- Namespace holding the source Secret. The chart never creates the key —
+  # mint it once with `openssl rand -base64 32`; a key in a values file or a
+  # chart is a published key.
+  sourceNamespace: anteroom-system
+  # -- Name of the source Secret in `sourceNamespace`.
+  sourceName: anteroom
+
+rbac:
+  # -- Create the ClusterRole that aggregates ConfigMap/Secret permissions to
+  # Kyverno's admission and background controllers. Without it the generate
+  # policy is refused at apply time by Kyverno's policy-validation webhook.
+  # Secrets are the sensitive half of the grant: the background controller
+  # can then read and write Secrets in every namespace, which is inherent to
+  # cloning a key across namespaces. If that is too broad, disable
+  # `hmacSecret.clone`, distribute the key another way, and narrow this role.
+  create: true
+
+# -- The gate's whole configuration file, generated verbatim into every
+# opted-in namespace as `anteroom.toml` and mounted over /etc/anteroom.
+# This is the single place the fleet's gate policy lives: edits here roll out
+# to every namespace on upgrade (and hand-edits to generated copies are
+# reverted), though the gate reads the file at startup, so a change lands
+# with a rollout. `upstream` is deliberately absent — the injection policy
+# supplies it per pod as ANTEROOM_UPSTREAM. Unknown keys are a startup error;
+# check spelling against anteroom.example.toml at the repository root.
+# @default -- the fully commented `anteroom.toml` in values.yaml — read it there
+gateConfig: |
+  # All interfaces: the Service must reach the gate across the pod
+  # network. The shipped default of 127.0.0.1:8080 would accept
+  # nothing but the sidecar's own namespace.
+  listen = ":8080"
+
+  # The operator port: /metrics (Prometheus text), /stats, and
+  # /healthz. It is UNAUTHENTICATED — reachability is the access
+  # control — so it stays on the pod's loopback, where nothing on
+  # the cluster network can reach it but `kubectl port-forward`
+  # still can (port-forward dials localhost inside the pod's own
+  # namespace). Widen to ":8090" only when an in-cluster scraper
+  # must reach it, and know that metrics reveal traffic volumes.
+  admin_listen = "127.0.0.1:8090"
+
+  # `upstream` is deliberately absent: it is 127.0.0.1:<port> and
+  # the port differs per workload, so the injection policy supplies
+  # it as ANTEROOM_UPSTREAM from the pod's upstream-port
+  # annotation. Environment variables override this file.
+
+  pass_ttl    = "60s"   # a pass is short-lived on purpose; the service
+  max_session = "30m"   # worker renews it in the background up to this cap
+  difficulty  = 14      # ~16k WebCrypto hashes: about a second on a laptop
+  renew_difficulty = 6  # renewals are cheap by design (mobile battery)
+  inject = true         # add the renewal script to proxied HTML
+
+  # Trap 1 in docs/docker.md, and it applies with full force to
+  # Kubernetes: WebCrypto and service workers require a secure
+  # context — HTTPS or localhost. Reaching a NodePort at
+  # http://10.x.y.z walls every visitor permanently. Terminate TLS
+  # at your Ingress (and then set trusted_proxies below), or flip
+  # this to true for a LAN-only cluster and accept a 10-50x slower
+  # fallback whose cost falls on the honest visitor.
+  allow_insecure_context = false
+
+  # Empty is correct when clients reach the Service directly from
+  # inside the cluster: nothing in front sets X-Forwarded-For, and
+  # trusting a header nobody sets lets any client claim any
+  # address. Behind an ingress controller this MUST name the range
+  # its traffic arrives from — usually the pod CIDR, e.g.
+  #   trusted_proxies = ["10.244.0.0/16"]
+  # or three things break quietly: the pass cookie loses its
+  # Secure flag, the app sees the ingress's address instead of the
+  # visitor's, and CIDR bypass matches the wrong thing.
+  trusted_proxies = []
+
+  # No [[hmac_keys]]: the key arrives as ANTEROOM_HMAC_KEY from
+  # the cloned Secret, registering as kid = "env" on every
+  # replica. Pick ONE mechanism fleet-wide — an env-keyed gate and
+  # a file-keyed gate will not verify each other's passes even
+  # with identical key bytes.
+
+  [bypass]
+  # Paths that skip the gate entirely, byte for byte and with no
+  # pass. `/webhooks/*` is the row that costs real money: a POST
+  # is not a browser navigation, so without it the gate refuses
+  # the delivery and the body is gone. Kubelet probes need no row
+  # here — the kubelet dials the app's containerPort directly,
+  # inside the pod, and never crosses the gate.
+  paths = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*", "/webhooks/*"]
+  cidrs = []
+
+  [triage]
+  json_accept    = true
+  ok_body_agents = ["claude-user"]

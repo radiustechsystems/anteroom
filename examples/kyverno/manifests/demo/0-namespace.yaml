@@ -1,0 +1,9 @@
+# The namespace opts in with one label. On admission (or on policy apply, for
+# a namespace that already exists) Kyverno generates anteroom-config and clones
+# the anteroom Secret into it — everything the injected sidecar mounts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello
+  labels:
+    anteroom.radiustech.xyz/inject: enabled

@@ -1,0 +1,27 @@
+apiVersion: v2
+name: kyverno-policies
+description: >-
+  Kyverno ClusterPolicies that put an Anteroom proof-of-work gate in front of
+  workloads by admission policy. Label a pod template and the gate is injected
+  as a sidecar proxy; label a Service and its traffic is rewritten through the
+  gate; label a namespace and the config and signing key the sidecar mounts
+  are provisioned into it. The application manifests never mention Anteroom.
+type: application
+# The chart's own version. Bump on any change to templates or values.
+version: 0.1.0
+# The gate version the default values deploy. "latest" mirrors the default
+# image tag, which is right for trying the chart and wrong in front of a real
+# site — pin image.tag (and bump this) for production. docs/docker.md
+# "Which tag" is the policy.
+appVersion: latest
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/radiustechsystems/anteroom
+sources:
+  - https://github.com/radiustechsystems/anteroom
+keywords:
+  - anteroom
+  - kyverno
+  - policy
+  - sidecar
+  - proof-of-work
+  - bot-protection

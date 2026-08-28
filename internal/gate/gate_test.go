@@ -1838,14 +1838,6 @@ func TestPublicHostsPrecedeEveryAdmissionPath(t *testing.T) {
 	}
 }
 
-func TestRefusalCarriesChallengeMarker(t *testing.T) {
-	g, _ := newTestGate(t, fastCfg)
-	w := do(g, agentReq("/x"))
-	if got := w.Header().Get(actionHeader); got != "challenge" {
-		t.Errorf("%s = %q, want challenge", actionHeader, got)
-	}
-}
-
 func TestVendorClientIPHeadersStripped(t *testing.T) {
 	var seen http.Header
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

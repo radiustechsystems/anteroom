@@ -622,6 +622,30 @@ func TestRealAgentFetchToolsGetInstructions(t *testing.T) {
 	}
 }
 
+func TestAndroidWebViewPackageNameIsNotXHR(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const ua = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.0.0 Safari/537.36 TwitterAndroid/12.19.1-release.0 (312191000-r-00) Pixel+8/17 (Google;Pixel+8;google;shiba;0;;1;2015)"
+	const accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+
+	webview := httptest.NewRequest(http.MethodGet, "/article", nil)
+	webview.Header.Set("User-Agent", ua)
+	webview.Header.Set("Accept", accept)
+	webview.Header.Set("X-Requested-With", "com.twitter.android")
+	webview.RemoteAddr = "192.0.2.10:1234"
+	w := do(g, webview)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Android WebView got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+
+	xhr := webview.Clone(webview.Context())
+	xhr.Header = webview.Header.Clone()
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	w = do(g, xhr)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "markdown") {
+		t.Fatalf("XHR got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
 func TestPrefersMarkdown(t *testing.T) {
 	for _, tc := range []struct {
 		accept string

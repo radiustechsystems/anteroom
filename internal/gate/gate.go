@@ -752,10 +752,15 @@ func compilePaidRoutes(payments *config.Payments) ([]paidRoute, error) {
 	return routes, nil
 }
 
-// fragmentHeaders are set by clients fetching a piece of a page rather than a
-// page. They are not navigations however their fetch metadata reads, and they
-// are shared with the injection path, which must not touch them either.
-var fragmentHeaders = []string{"HX-Request", "X-Requested-With", "Turbo-Frame", "Turbo-Request-ID"}
+// isFragmentRequest identifies clients fetching part of a page rather than a
+// document. Android WebViews put an application package name in
+// X-Requested-With; only its conventional XMLHttpRequest value means XHR.
+func isFragmentRequest(r *http.Request) bool {
+	return r.Header.Get("HX-Request") != "" ||
+		strings.EqualFold(r.Header.Get("X-Requested-With"), "XMLHttpRequest") ||
+		r.Header.Get("Turbo-Frame") != "" ||
+		r.Header.Get("Turbo-Request-ID") != ""
+}
 
 // isBrowserNav decides who gets the wait page and who gets the machine-readable
 // refusal. Both errors cost: HTML hands a program a spinner it cannot dismiss,
@@ -776,10 +781,8 @@ func isBrowserNav(r *http.Request) bool {
 	if prefersMarkdown(accept) {
 		return false
 	}
-	for _, h := range fragmentHeaders {
-		if r.Header.Get(h) != "" {
-			return false
-		}
+	if isFragmentRequest(r) {
+		return false
 	}
 
 	// A subresource is never a navigation, whatever mode it claims. "empty" is

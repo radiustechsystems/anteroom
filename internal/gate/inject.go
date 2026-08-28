@@ -89,10 +89,8 @@ func injectable(r *http.Request) bool {
 	// Fragment requests from HTMX/Turbo are not documents even though they are
 	// text/html and may claim Accept: text/html. Injecting into a fragment puts a
 	// script tag in the middle of someone's page, or worse, replaces a target.
-	for _, h := range fragmentHeaders {
-		if r.Header.Get(h) != "" {
-			return false
-		}
+	if isFragmentRequest(r) {
+		return false
 	}
 	// Sec-Fetch-Dest is authoritative where it exists: "document" means a
 	// top-level navigation. An iframe, a script, an image is not ours to touch.

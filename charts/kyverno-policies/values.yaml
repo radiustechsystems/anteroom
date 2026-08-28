@@ -25,6 +25,37 @@ policies:
   # -- Create the generate rule that provisions the per-namespace ConfigMap
   # holding `gateConfig` below.
   generateConfig: true
+  # -- Record each labeled Service's original `spec.ports` in the annotation
+  # `anteroom.radiustech.xyz/original-ports` before rewriting it, and restore
+  # them when the `proxied` label is removed. Without this, removing the label
+  # leaves the Service targeting the port name `anteroom`, which blackholes it
+  # once the pods roll ungated — a mutation is stored, not overlaid, so
+  # nothing else can put the value back. The restore rule matches Services
+  # *without* the label, i.e. nearly all of them, which costs one extra rule
+  # evaluation per Service admission and no extra webhook traffic: Kyverno
+  # registers webhooks per kind and operation, so every Service create and
+  # update already reached it for the rewrite rule. The rule short-circuits on
+  # the missing annotation.
+  restoreService: true
+  # -- Create the NetworkPolicy that admits only the gate's port to gated
+  # pods, so nothing on the cluster network can reach the application
+  # container directly on the pod IP. **Off by default and read this first:**
+  # a NetworkPolicy is the one resource here whose failure mode is invisible
+  # in the object it creates. On a CNI that does not implement NetworkPolicy
+  # (kind's default kindnetd among them) it applies cleanly and fences
+  # nothing. On a CNI that does, whether the kubelet's probe traffic is
+  # exempt is a per-plugin answer — and the application container's probes
+  # target the very port this fences, so where they are not exempt this kills
+  # healthy pods. Verify both on your own CNI, then turn it on; use
+  # `networkPolicy.extraIngress` for the probe case.
+  networkPolicy: false
+  # -- Create the Audit-mode policy that reports pods carrying the inject
+  # label but no gate container. That combination means a pod was admitted
+  # while injection was off or broken, and it is worth a report because it is
+  # invisible from the outside and blackholes any Service already rewritten
+  # to `anteroom`. Audit only — it never blocks admission — and it matches
+  # only opted-in pods, so it reports on nothing you did not label.
+  auditDrift: true
 
 sidecar:
   # -- Compute for the injected gate: one binary proxying one app, so modest
@@ -46,6 +77,30 @@ sidecar:
       drop: [ALL]
     seccompProfile:
       type: RuntimeDefault
+
+networkPolicy:
+  # -- Name of the generated NetworkPolicy in each opted-in namespace.
+  name: only-through-anteroom
+  # -- Ingress rules appended verbatim to the generated NetworkPolicy, whose
+  # own rule admits nothing but TCP 8080. This is where the kubelet-probe
+  # problem gets solved on a CNI that does not exempt node traffic: name the
+  # node CIDR in an `ipBlock` and omit `ports`, since there is no portable
+  # "from the node" selector and the kubelet dials whatever port each workload
+  # uses. The same list is how an in-cluster Prometheus reaches a widened
+  # `admin_listen`, or how a mesh sidecar keeps a side channel. Every entry
+  # widens the fence, so each one deserves a comment saying why. See "Closing
+  # the side door" in this chart's README for the worked example.
+  extraIngress: []
+
+# -- Keep generated resources when the policy or the whole chart is removed.
+# Worth understanding before `helm uninstall`, because Kyverno's default is
+# not symmetric: the ConfigMap and the NetworkPolicy are generated from data
+# in the policy, so deleting the policy DELETES them in every namespace, while
+# the HMAC Secret is a clone and clones are retained. Set this to true and
+# the generated copies outlive the chart in every namespace — right when the
+# chart is being replaced or moved rather than withdrawn, and wrong if you
+# expect uninstall to leave nothing behind.
+orphanDownstreamOnPolicyDelete: false
 
 # -- Name of the per-namespace ConfigMap the generate policy creates and the
 # injected sidecar mounts at /etc/anteroom.
@@ -72,12 +127,14 @@ hmacSecret:
 
 rbac:
   # -- Create the ClusterRole that aggregates ConfigMap/Secret permissions to
-  # Kyverno's admission and background controllers. Without it the generate
-  # policy is refused at apply time by Kyverno's policy-validation webhook.
-  # Secrets are the sensitive half of the grant: the background controller
-  # can then read and write Secrets in every namespace, which is inherent to
-  # cloning a key across namespaces. If that is too broad, disable
-  # `hmacSecret.clone`, distribute the key another way, and narrow this role.
+  # Kyverno's admission and background controllers — plus NetworkPolicy
+  # permissions when `policies.networkPolicy` is on, and only then. Without it
+  # the generate policy is refused at apply time by Kyverno's policy-validation
+  # webhook, which names the missing permission. Secrets are the sensitive half
+  # of the grant: the background controller can then read and write Secrets in
+  # every namespace, which is inherent to cloning a key across namespaces. If
+  # that is too broad, disable `hmacSecret.clone`, distribute the key another
+  # way, and narrow this role.
   create: true
 
 # -- The gate's whole configuration file, generated verbatim into every

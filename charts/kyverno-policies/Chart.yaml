@@ -5,10 +5,12 @@ description: >-
   workloads by admission policy. Label a pod template and the gate is injected
   as a sidecar proxy; label a Service and its traffic is rewritten through the
   gate; label a namespace and the config and signing key the sidecar mounts
-  are provisioned into it. The application manifests never mention Anteroom.
+  are provisioned into it, optionally with a NetworkPolicy fencing the
+  application's own port. Removing a label undoes what adding it did. The
+  application manifests never mention Anteroom.
 type: application
 # The chart's own version. Bump on any change to templates or values.
-version: 0.1.0
+version: 0.2.0
 # The gate version the default values deploy. "latest" mirrors the default
 # image tag, which is right for trying the chart and wrong in front of a real
 # site — pin image.tag (and bump this) for production. docs/docker.md

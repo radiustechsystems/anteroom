@@ -94,8 +94,13 @@ spec:
                   # rewrites every Service targetPort to "anteroom", and a
                   # named targetPort resolves to whatever containerPort carries
                   # the name — so the Service needs no knowledge of the number.
+                  #
+                  # The number comes from a template constant because the
+                  # NetworkPolicy fence has to name it in digits (a named port
+                  # there is CNI-dependent), and a fence admitting a port the
+                  # gate does not listen on is a blackholed Service.
                   - name: anteroom
-                    containerPort: 8080
+                    containerPort: {{ include "kyverno-policies.gatePort" . }}
                 env:
                   # 127.0.0.1, not a service name: containers in a pod share a
                   # network namespace. This is the line that differs from the

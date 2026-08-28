@@ -47,7 +47,16 @@ spec:
         kind: ConfigMap
         name: {{ .Values.configMapName }}
         namespace: {{ `"{{ request.object.metadata.name }}"` }}
+        # Also the opt-out path: removing the namespace label makes the trigger
+        # stop matching, and a synchronized downstream is deleted when that
+        # happens. Nothing is left behind to clean up by hand.
         synchronize: true
+        {{- if .Values.orphanDownstreamOnPolicyDelete }}
+        # Non-default: keeps this ConfigMap in every namespace when the policy
+        # or the chart is deleted, which Kyverno otherwise takes as the signal
+        # to remove what it generated from data.
+        orphanDownstreamOnPolicyDelete: true
+        {{- end }}
         data:
           data:
             anteroom.toml: |
@@ -76,6 +85,15 @@ spec:
         # signs, the rest still verify), which is file-keyed and therefore a
         # different fleet-wide mechanism than the env var — never mix the two
         # in one fleet.
+        #
+        # synchronize also deletes this clone when the namespace label is
+        # removed. It does NOT delete it when the policy or the chart is
+        # deleted: Kyverno retains cloned downstreams and removes generated-
+        # from-data ones, so `helm uninstall` takes the ConfigMap and leaves
+        # the key. Deliberate on Kyverno's part — deleting copies of a secret
+        # is not a thing to do as a side effect — and the reason
+        # orphanDownstreamOnPolicyDelete appears on the data rules above and
+        # not here, where it would have nothing to change.
         synchronize: true
         clone:
           namespace: {{ .Values.hmacSecret.sourceNamespace }}

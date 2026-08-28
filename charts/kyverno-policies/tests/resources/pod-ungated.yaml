@@ -1,0 +1,22 @@
+# The drift state: opted in, and no gate. A pod only reaches this by being
+# admitted while the injection policy was not running — the chart uninstalled,
+# policies.injectSidecar off, or Kyverno's webhook down and failing open. It
+# looks gated from the manifest and is not, and a Service already rewritten to
+# the port name "anteroom" cannot reach it at all.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-app-ungated
+  namespace: hello
+  labels:
+    app: hello-app
+    anteroom.radiustech.xyz/inject: enabled
+  annotations:
+    anteroom.radiustech.xyz/upstream-port: "3000"
+spec:
+  containers:
+    - name: hello-app
+      image: hello-app:local
+      ports:
+        - name: http
+          containerPort: 3000

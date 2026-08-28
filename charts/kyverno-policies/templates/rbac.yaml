@@ -29,4 +29,13 @@ rules:
   - apiGroups: [""]
     resources: [configmaps, secrets]
     verbs: [get, list, watch, create, update, delete]
+  {{- if .Values.policies.networkPolicy }}
+  # Granted only when the fence is switched on. Kyverno validates a generate
+  # policy against the background controller's actual permissions when the
+  # policy is applied, so an ungranted kind is a legible apply-time refusal
+  # rather than a policy that installs and silently generates nothing.
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, delete]
+  {{- end }}
 {{- end }}

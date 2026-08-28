@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: plain
+  namespace: other
+spec:
+  containers:
+    - name: plain
+      image: hello-app:local
+      ports:
+        - name: http
+          containerPort: 3000

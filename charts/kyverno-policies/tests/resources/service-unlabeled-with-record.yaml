@@ -1,0 +1,19 @@
+# What `kubectl label svc hello-app anteroom.radiustech.xyz/proxied-` leaves
+# behind: the label is gone, the rewrite is still stored, and the record of
+# what it replaced is still in the annotation. This is the input the restore
+# rule exists for.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-app
+  namespace: hello
+  annotations:
+    anteroom.radiustech.xyz/original-ports: '[{"name":"http","port":80,"protocol":"TCP","targetPort":"http"}]'
+spec:
+  selector:
+    app: hello-app
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: anteroom

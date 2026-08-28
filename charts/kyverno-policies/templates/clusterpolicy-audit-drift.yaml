@@ -1,0 +1,76 @@
+{{- /*
+Report the one drift state nothing else can see.
+
+Everything else in this chart runs at admission, which means it is correct
+about the future and silent about the present. The gap that matters: a pod
+carrying the inject label but NO gate container. That happens when a pod was
+admitted while the injection policy was absent, disabled, or failing open —
+Kyverno's webhook down, the chart not yet installed, `policies.injectSidecar`
+off — and it is the worst-looking failure in the set, because a Service
+already rewritten to the port name `anteroom` finds no such port on that pod
+and blackholes it.
+
+From outside it is indistinguishable from the app being down. So: an Audit
+rule, whose entire product is a PolicyReport entry naming the pod.
+
+  kubectl get policyreport -A \
+    --field-selector metadata.name!=nonexistent -o wide
+  kubectl describe policyreport -n <namespace>
+
+Audit, never Enforce. Enforcing it would deny the pod, and a pod that cannot
+be admitted because the thing that was supposed to mutate it did not run is a
+cluster you cannot repair by rolling forward. The report is the right output:
+the fix is always a rollout, which the operator does knowing why.
+
+`background: true` is what makes this find pods that already exist, rather
+than only ones admitted from now on — which for a drift check is the entire
+point. The selector keeps the scan to opted-in pods.
+*/ -}}
+{{- if .Values.policies.auditDrift }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: audit-anteroom-drift
+  labels:
+    {{- include "kyverno-policies.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Report gated pods with no gate
+    policies.kyverno.io/category: Anteroom
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Audits pods labeled anteroom.radiustech.xyz/inject=enabled that do not
+      carry an anteroom container, the state a pod is left in when it was
+      admitted while sidecar injection was not running. Reports only; the fix
+      is a rollout.
+    # Same reasoning as the injection policy: report on the POD, which is
+    # where the container either is or is not, and leave the workload
+    # manifests in git untouched by policy.
+    pod-policies.kyverno.io/autogen-controllers: none
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: gated-pod-must-carry-gate
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/inject: enabled
+      validate:
+        message: >-
+          This pod is labeled anteroom.radiustech.xyz/inject=enabled but runs
+          no anteroom container, so it is ungated while presenting itself as
+          gated — and a Service rewritten to the port name "anteroom" cannot
+          reach it at all. It was admitted while the injection policy was not
+          running. Roll the workload to have the gate injected
+          (kubectl rollout restart), or remove the label and the Service's
+          proxied label together if the workload should no longer be gated.
+        deny:
+          conditions:
+            all:
+              - key: {{ `"{{ request.object.spec.containers[?name=='anteroom'] | length(@) }}"` }}
+                operator: Equals
+                value: 0
+{{- end }}

@@ -1,5 +1,6 @@
-# Keep packaging lean: docs tooling and VCS noise stay out of the .tgz.
+# Keep packaging lean: docs tooling, tests, and VCS noise stay out of the .tgz.
 .git/
 *.swp
 *.tmp
 README.md.gotmpl
+tests/

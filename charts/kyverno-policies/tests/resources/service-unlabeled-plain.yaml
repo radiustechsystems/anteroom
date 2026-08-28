@@ -1,0 +1,14 @@
+# Any other Service in the cluster. The restore rule selects the ABSENCE of
+# the proxied label, so it matches this — and must leave it untouched.
+apiVersion: v1
+kind: Service
+metadata:
+  name: unrelated
+  namespace: other
+spec:
+  selector:
+    app: unrelated
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

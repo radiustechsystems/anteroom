@@ -11,23 +11,11 @@ import (
 // endpoint answers 404 for a nil log.
 func (g *Gate) Activity() *activity.Log { return g.activity }
 
-// walledDecisions are the ladder rungs that mean "this IP asked for content
-// and was walled": the wait page, the machine-readable refusal, and the 402 on
-// a paid route. Deliberately only these three — admitted and bypassed traffic
-// must never touch the log (the log records challenge activity, not visits),
-// and the pay-* outcomes describe a client already attempting to pay, which
-// the payment limiter and breaker govern.
-var walledDecisions = map[string]bool{
-	"wait-page":        true,
-	"refusal":          true,
-	"payment-required": true,
-}
-
 // recordDecision is the ladder-side activity hook, one call per request from
 // ServeHTTP. Challenge-answer outcomes never reach it — they hide behind the
 // "own-endpoint" decision and are recorded by noteAnswer instead.
-func (g *Gate) recordDecision(decision string, r *http.Request) {
-	if g.activity == nil || !walledDecisions[decision] {
+func (g *Gate) recordDecision(decision decision, r *http.Request) {
+	if g.activity == nil || !decision.walled() {
 		return
 	}
 	// An unresolvable client is skipped, not bucketed under a sentinel key

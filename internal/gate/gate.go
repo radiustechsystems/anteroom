@@ -330,7 +330,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rec := &recorder{ResponseWriter: w, status: http.StatusOK}
 	decision := g.serve(rec, r)
-	g.met.requests.With(decision).Inc()
+	g.met.requests.With(decision.String()).Inc()
 	g.met.countBytes(decision, uint64(rec.n))
 	g.recordDecision(decision, r)
 	if !verbose {
@@ -339,7 +339,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	attrs := []any{
 		"method", r.Method,
 		"path", r.URL.Path,
-		"decision", decision,
+		"decision", decision.String(),
 		"status", rec.status,
 		"bytes", rec.n,
 		"dur", g.now().Sub(start).Round(time.Microsecond).String(),
@@ -355,7 +355,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serve is the ladder proper. It returns the name of the rung that answered, for
 // logging; the name is also the vocabulary the docs use to describe the ladder.
-func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
+func (g *Gate) serve(w http.ResponseWriter, r *http.Request) decision {
 	// Strip headers the gate itself authors: an inbound copy is a forgery
 	// attempt, and the upstream must only ever see ours.
 	r.Header.Del("X-Anteroom-Status")
@@ -377,7 +377,7 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	if p := r.URL.Path; p != cleanPath(p) || strings.Contains(p, `\`) {
 		noStore(w)
 		http.Error(w, "bad request: non-canonical path", http.StatusBadRequest)
-		return "non-canonical-path"
+		return decisionNonCanonicalPath
 	}
 
 	// An authority allowlist is a deployment boundary, so it precedes every
@@ -389,25 +389,25 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 		if _, ok := g.publicHosts[requestAudience(r)]; !ok {
 			noStore(w)
 			http.Error(w, "misdirected request: authority is not served here", http.StatusMisdirectedRequest)
-			return "unknown-authority"
+			return decisionUnknownAuthority
 		}
 	}
 
 	// 1. The gate's own endpoints — never proxied, never gated.
 	if strings.HasPrefix(r.URL.Path, prefix) {
 		g.serveOwn(w, r)
-		return "own-endpoint"
+		return decisionOwnEndpoint
 	}
 
 	// 2. Bypass: exempted paths and always-allowed ranges. Never injected into —
 	// a bypass exists because something needs the bytes untouched.
 	if g.match.Path(r.URL.Path) {
 		g.forward(w, r)
-		return "bypass-path"
+		return decisionBypassPath
 	}
 	if ip, err := g.match.ClientIP(r); err == nil && g.match.IP(ip) {
 		g.forward(w, r)
-		return "bypass-ip"
+		return decisionBypassIP
 	}
 
 	// 2b. A CORS preflight goes upstream. Not a concession — a preflight is
@@ -424,7 +424,7 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	// make the upstream answer OPTIONS, which is a cheap handler and no content.
 	if isCORSPreflight(r) {
 		g.forward(w, r)
-		return "cors-preflight"
+		return decisionCORSPreflight
 	}
 
 	// 3. A valid pass whose scope covers this path.
@@ -440,10 +440,10 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 			// request, so there is no receipt to re-state — and an upstream copy
 			// of one is deleted rather than forwarded.
 			g.serveUpstream(&paidWriter{ResponseWriter: w}, r, false)
-			return "pass-" + string(p.Kind)
+			return decisionPassPaid
 		}
 		g.serveUpstream(w, r, true)
-		return "pass-" + string(p.Kind)
+		return decisionPassPoW
 	}
 
 	// 4. No pass. A presented payment is tried first, then the client class
@@ -461,22 +461,22 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 				if len(values) != 1 {
 					g.servePaymentRequired(w, r, &route.rule,
 						"exactly one PAYMENT-SIGNATURE header is required", 0)
-					return "pay-malformed"
+					return decisionPayMalformed
 				}
 				return g.servePayment(w, r, route, values[0])
 			}
 			if !isBrowserNav(r) {
 				g.servePaymentRequired(w, r, &route.rule, "PAYMENT-SIGNATURE header is required", 0)
-				return "payment-required"
+				return decisionPaymentRequired
 			}
 		}
 	}
 	if isBrowserNav(r) {
 		g.serveWaitPage(w, r)
-		return "wait-page"
+		return decisionWaitPage
 	}
 	g.serveRefusal(w, r)
-	return "refusal"
+	return decisionRefusal
 }
 
 // serveUpstream proxies an admitted request, injecting the renewal script into

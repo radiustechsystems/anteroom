@@ -410,7 +410,7 @@ func (g *Gate) payMarkdown(doc payment.Required, rule *config.Rule) string {
 // call is there so that a garbage header costs the gate nothing: decode,
 // structural match against the rule's own requirements, single-use pre-check,
 // then rate limit, and only then egress.
-func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidRoute, header string) string {
+func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidRoute, header string) decision {
 	rule := &route.rule
 	// Settlement acquires an admission capability; it does not execute an
 	// application operation. Coupling settlement to POST/PATCH/etc. creates an
@@ -421,18 +421,18 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		g.servePaymentRequired(w, r, rule,
 			"present payments on GET or HEAD to acquire a pass, then retry the original request with the pass cookie", 0)
-		return "pay-method-refused"
+		return decisionPayMethodRefused
 	}
 	if isUpgradeRequest(r) {
 		g.servePaymentRequired(w, r, rule,
 			"payments cannot be presented on protocol-upgrade requests", 0)
-		return "pay-upgrade-refused"
+		return decisionPayUpgradeRefused
 	}
 	p, err := payment.DecodePayload(header)
 	if err != nil {
 		g.lg.Debug("malformed payment presentation", "err", err)
 		g.servePaymentRequired(w, r, rule, "PAYMENT-SIGNATURE could not be decoded", 0)
-		return "pay-malformed"
+		return decisionPayMalformed
 	}
 
 	doc := g.offer(rule, r, "")
@@ -443,7 +443,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 			"network", p.Network(), "scheme", p.Scheme())
 		g.servePaymentRequired(w, r,
 			rule, "payment presented on a network or scheme this resource does not accept", 0)
-		return "pay-unoffered"
+		return decisionPayUnoffered
 	}
 
 	// A payment the gate cannot name is a payment it cannot deduplicate, and
@@ -457,7 +457,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Debug("payment presentation could not be identified", "err", err)
 		g.servePaymentRequired(w, r, rule,
 			"the authorization in this payment names no payer and nonce to identify it by", 0)
-		return "pay-unidentified"
+		return decisionPayUnidentified
 	}
 
 	state, lease, prior, err := g.grants.Begin(id)
@@ -465,25 +465,25 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Error("payment state unavailable", "pay_id", id[:16], "err", err)
 		g.servePaymentRequired(w, r, rule,
 			"payment recovery state is temporarily unavailable; retry the same payment", 5*time.Second)
-		return "pay-state-unavailable"
+		return decisionPayStateUnavailable
 	}
 	switch state {
 	case payment.BeginRecoverable:
 		if prior.Scope != route.scope || prior.Audience != requestAudience(r) {
 			g.servePaymentRequired(w, r, rule,
 				"this payment has already been used for another resource", 0)
-			return "pay-replay"
+			return decisionPayReplay
 		}
 		return g.servePaidGrant(w, r, rule, id, prior, true)
 	case payment.BeginSpent:
 		g.lg.Debug("payment entitlement expired", "pay_id", id[:16])
 		g.servePaymentRequired(w, r, rule,
 			"this payment has already been used; sign a fresh one", 0)
-		return "pay-replay"
+		return decisionPayReplay
 	case payment.BeginInFlight:
 		g.servePaymentRequired(w, r, rule,
 			"this payment is already being processed; retry the same payment", 2*time.Second)
-		return "pay-inflight"
+		return decisionPayInflight
 	}
 	defer func() {
 		if err := g.grants.Release(id, lease); err != nil {
@@ -507,7 +507,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Warn("payment presentation rate limited", "client", limitKey)
 		g.servePaymentRequired(w, r, rule,
 			"too many payment attempts; slow down and retry", 10*time.Second)
-		return "pay-rate-limited"
+		return decisionPayRateLimited
 	}
 
 	v := g.verifierFor(req.Network)
@@ -519,7 +519,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Error("no verifier for an offered rail — gate construction bug", "network", req.Network)
 		g.servePaymentRequired(w, r, rule,
 			"the gate cannot reach a settlement service right now; retry shortly or use the free challenge", 5*time.Second)
-		return "pay-infra"
+		return decisionPayInfra
 	}
 	res := v.Verify(r.Context(), p, req)
 
@@ -538,12 +538,12 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		if err != nil {
 			g.lg.Error("persisting a settled payment grant", "pay_id", id, "err", err)
 			g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
-			return "pay-grant-failed"
+			return decisionPayGrantFailed
 		}
 		if grant.Scope != route.scope || grant.Audience != requestAudience(r) {
 			g.lg.Error("settled payment raced with a different durable grant", "pay_id", id)
 			g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
-			return "pay-grant-conflict"
+			return decisionPayGrantConflict
 		}
 		g.countPaidValue(grant.Amount, req.Network, rule)
 		return g.servePaidGrant(w, r, rule, id, grant, false)
@@ -556,7 +556,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Warn("payment rejected by the facilitator",
 			"reason", reason, "payer", res.Payer, "scope", rule.Name)
 		g.servePaymentRequired(w, r, rule, reason, 0)
-		return "pay-rejected"
+		return decisionPayRejected
 
 	case payment.Pending:
 		// Broadcast, confirmation unknown. Nothing is claimed, so the payer's
@@ -568,7 +568,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 			"pay_id", id[:16], "tx", res.Tx, "network", res.Network,
 			"payer", res.Payer, "scope", rule.Name)
 		g.servePaymentPending(w, r, res)
-		return "pay-pending"
+		return decisionPayPending
 
 	case payment.Ambiguous:
 		retry := res.RetryAfter
@@ -580,7 +580,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		g.lg.Error("settle ambiguous — reconcile against the facilitator or chain",
 			"pay_id", id, "payer", res.Payer, "scope", rule.Name, "err", res.Err)
 		g.servePaymentRequired(w, r, rule, res.Reason, retry)
-		return "pay-ambiguous"
+		return decisionPayAmbiguous
 
 	default: // Indeterminate
 		g.lg.Warn("facilitator unavailable; payments degraded, free path unaffected",
@@ -595,7 +595,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		// 402, never 503. A 503 would claim the site is down, which is false —
 		// the free door works. A bare challenge would strand the agent.
 		g.servePaymentRequired(w, r, rule, res.Reason, retry)
-		return "pay-infra"
+		return decisionPayInfra
 	}
 }
 
@@ -605,12 +605,12 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 // the entitlement it represents.
 func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *config.Rule,
 	id string, grant payment.Grant, recovered bool,
-) string {
+) decision {
 	exp := time.Unix(grant.ExpiresAt, 0)
 	if !g.now().Before(exp) {
 		g.servePaymentRequired(w, r, rule,
 			"this payment's access period has expired; sign a fresh one", 0)
-		return "pay-replay"
+		return decisionPayReplay
 	}
 	if err := g.setPassCookie(w, r, token.Pass{
 		Kind:  token.KindPaid,
@@ -620,7 +620,7 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 	}, exp, time.Time{}); err != nil {
 		g.lg.Error("minting a durable paid pass", "pay_id", id, "err", err)
 		g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
-		return "pay-grant-failed"
+		return decisionPayGrantFailed
 	}
 	g.met.minted.With("paid").Inc()
 
@@ -644,7 +644,7 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 	r.Header.Del(payment.HeaderSignature)
 	// paidWriter applies the final no-store seal after upstream headers arrive.
 	g.serveUpstream(&paidWriter{ResponseWriter: w, settle: b64Std(enc)}, r, false)
-	return "pass-paid"
+	return decisionPassPaid
 }
 
 // countPaidValue records a fresh settlement's value, normalized from the

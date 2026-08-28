@@ -14,6 +14,9 @@ const (
 	decisionCORSPreflight
 	decisionPassPoW
 	decisionPassPaid
+	decisionBypassCrawler
+	decisionCrawlerVerificationUnavailable
+	decisionCrawlerUnverified
 	decisionPaymentRequired
 	decisionPayMethodRefused
 	decisionPayUpgradeRefused
@@ -46,32 +49,35 @@ type decisionInfo struct {
 }
 
 var decisionInfos = [decisionCount]decisionInfo{
-	decisionNonCanonicalPath:    {name: "non-canonical-path"},
-	decisionUnknownAuthority:    {name: "unknown-authority"},
-	decisionOwnEndpoint:         {name: "own-endpoint"},
-	decisionBypassPath:          {name: "bypass-path", flags: decisionUpstream},
-	decisionBypassIP:            {name: "bypass-ip", flags: decisionUpstream},
-	decisionCORSPreflight:       {name: "cors-preflight", flags: decisionUpstream},
-	decisionPassPoW:             {name: "pass-pow", flags: decisionUpstream},
-	decisionPassPaid:            {name: "pass-paid", flags: decisionUpstream},
-	decisionPaymentRequired:     {name: "payment-required", flags: decisionWalled},
-	decisionPayMethodRefused:    {name: "pay-method-refused"},
-	decisionPayUpgradeRefused:   {name: "pay-upgrade-refused"},
-	decisionPayMalformed:        {name: "pay-malformed"},
-	decisionPayUnidentified:     {name: "pay-unidentified"},
-	decisionPayUnoffered:        {name: "pay-unoffered"},
-	decisionPayReplay:           {name: "pay-replay"},
-	decisionPayStateUnavailable: {name: "pay-state-unavailable"},
-	decisionPayInflight:         {name: "pay-inflight"},
-	decisionPayRateLimited:      {name: "pay-rate-limited"},
-	decisionPayPending:          {name: "pay-pending"},
-	decisionPayGrantFailed:      {name: "pay-grant-failed"},
-	decisionPayGrantConflict:    {name: "pay-grant-conflict"},
-	decisionPayRejected:         {name: "pay-rejected"},
-	decisionPayAmbiguous:        {name: "pay-ambiguous"},
-	decisionPayInfra:            {name: "pay-infra"},
-	decisionWaitPage:            {name: "wait-page", flags: decisionWalled},
-	decisionRefusal:             {name: "refusal", flags: decisionWalled},
+	decisionNonCanonicalPath:               {name: "non-canonical-path"},
+	decisionUnknownAuthority:               {name: "unknown-authority"},
+	decisionOwnEndpoint:                    {name: "own-endpoint"},
+	decisionBypassPath:                     {name: "bypass-path", flags: decisionUpstream},
+	decisionBypassIP:                       {name: "bypass-ip", flags: decisionUpstream},
+	decisionCORSPreflight:                  {name: "cors-preflight", flags: decisionUpstream},
+	decisionPassPoW:                        {name: "pass-pow", flags: decisionUpstream},
+	decisionPassPaid:                       {name: "pass-paid", flags: decisionUpstream},
+	decisionBypassCrawler:                  {name: "bypass-crawler", flags: decisionUpstream},
+	decisionCrawlerVerificationUnavailable: {name: "crawler-verification-unavailable"},
+	decisionCrawlerUnverified:              {name: "crawler-unverified", flags: decisionWalled},
+	decisionPaymentRequired:                {name: "payment-required", flags: decisionWalled},
+	decisionPayMethodRefused:               {name: "pay-method-refused"},
+	decisionPayUpgradeRefused:              {name: "pay-upgrade-refused"},
+	decisionPayMalformed:                   {name: "pay-malformed"},
+	decisionPayUnidentified:                {name: "pay-unidentified"},
+	decisionPayUnoffered:                   {name: "pay-unoffered"},
+	decisionPayReplay:                      {name: "pay-replay"},
+	decisionPayStateUnavailable:            {name: "pay-state-unavailable"},
+	decisionPayInflight:                    {name: "pay-inflight"},
+	decisionPayRateLimited:                 {name: "pay-rate-limited"},
+	decisionPayPending:                     {name: "pay-pending"},
+	decisionPayGrantFailed:                 {name: "pay-grant-failed"},
+	decisionPayGrantConflict:               {name: "pay-grant-conflict"},
+	decisionPayRejected:                    {name: "pay-rejected"},
+	decisionPayAmbiguous:                   {name: "pay-ambiguous"},
+	decisionPayInfra:                       {name: "pay-infra"},
+	decisionWaitPage:                       {name: "wait-page", flags: decisionWalled},
+	decisionRefusal:                        {name: "refusal", flags: decisionWalled},
 }
 
 func (d decision) String() string {

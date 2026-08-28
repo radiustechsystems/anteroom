@@ -70,6 +70,39 @@ func TestLoadMinimal(t *testing.T) {
 	}
 }
 
+func TestVerifiedCrawlerConfig(t *testing.T) {
+	cfg, err := Load(write(t, minimal+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Bypass.VerifiedCrawlers) != 1 || cfg.Bypass.VerifiedCrawlers[0] != "googlebot" {
+		t.Fatalf("verified crawlers = %v", cfg.Bypass.VerifiedCrawlers)
+	}
+	for _, name := range []string{"bingbot", "yandexbot", "ccbot"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(write(t, minimal+"\n[bypass]\nverified_crawlers = [\""+name+"\"]\n"))
+			if err != nil {
+				t.Errorf("supported crawler was rejected: %v", err)
+			}
+		})
+	}
+	for name, list := range map[string]string{
+		"case mismatch": `["Googlebot"]`,
+		"unsupported":   `["googleother"]`,
+		"duplicate":     `["googlebot", "googlebot"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(write(t, minimal+"\n[bypass]\nverified_crawlers = "+list+"\n"))
+			if err == nil {
+				t.Errorf("verified_crawlers = %s was accepted", list)
+			}
+		})
+	}
+}
+
 func TestLoadFullPayments(t *testing.T) {
 	cfg, err := Load(write(t, minimal+paymentsHeader+`
 [[payments.rules]]

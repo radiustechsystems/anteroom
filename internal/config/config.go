@@ -22,6 +22,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/radiustechsystems/anteroom/internal/bypass"
+	"github.com/radiustechsystems/anteroom/internal/crawler"
 	"github.com/radiustechsystems/anteroom/internal/token"
 )
 
@@ -217,8 +218,9 @@ type Rule struct {
 }
 
 type Bypass struct {
-	Paths []string `toml:"paths"`
-	CIDRs []string `toml:"cidrs"`
+	Paths            []string `toml:"paths"`
+	CIDRs            []string `toml:"cidrs"`
+	VerifiedCrawlers []string `toml:"verified_crawlers"`
 }
 
 // Activity turns on the per-IP challenge-activity log served at the admin
@@ -396,6 +398,16 @@ func (c *Config) validate() error {
 	// Validate bypass + trusted_proxies by compiling them.
 	if _, err := bypass.New(c.Bypass.Paths, c.Bypass.CIDRs, c.TrustedProxies); err != nil {
 		return err
+	}
+	seenCrawler := make(map[string]bool, len(c.Bypass.VerifiedCrawlers))
+	for _, name := range c.Bypass.VerifiedCrawlers {
+		if !crawler.Supported(name) {
+			return fmt.Errorf("config: bypass.verified_crawlers entry %q is unsupported — available: %s", name, crawler.AvailableNames)
+		}
+		if seenCrawler[name] {
+			return fmt.Errorf("config: bypass.verified_crawlers contains duplicate %q", name)
+		}
+		seenCrawler[name] = true
 	}
 	for i := range c.HMACKeys {
 		k := &c.HMACKeys[i]

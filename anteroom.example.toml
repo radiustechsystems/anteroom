@@ -241,6 +241,13 @@ paid_ttl  = "1h"
 [bypass]
 paths    = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*"]
 cidrs    = []                         # always-allowed ranges (offices, monitors)
+# Explicit crawler identities that may bypass proof of work after address
+# verification. Published ranges are embedded for Googlebot, Bingbot, and
+# CCBot; all four use forward-confirmed reverse DNS as documented by their
+# operators. Ordinary traffic never causes a DNS lookup. A verified crawler is
+# passed through on every route; it is never asked to solve or pay. Available:
+# googlebot, bingbot, yandexbot, ccbot.
+verified_crawlers = ["googlebot", "bingbot", "yandexbot", "ccbot"]
 
 # ---------------------------------------------------------------------------
 # Triage: how non-browser clients receive the payment offer.

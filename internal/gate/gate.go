@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"path"
 	"sort"
@@ -27,6 +28,7 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/bypass"
 	"github.com/radiustechsystems/anteroom/internal/challenge"
 	"github.com/radiustechsystems/anteroom/internal/config"
+	"github.com/radiustechsystems/anteroom/internal/crawler"
 	"github.com/radiustechsystems/anteroom/internal/metrics"
 	"github.com/radiustechsystems/anteroom/internal/payment"
 	"github.com/radiustechsystems/anteroom/internal/token"
@@ -55,6 +57,7 @@ type Gate struct {
 	pages       *pageSource
 	now         func() time.Time
 	met         *gateMetrics
+	crawlers    crawlerVerifier
 
 	// The challenge-activity log for external ban tooling. Nil when the
 	// [activity] section is unconfigured — every Record call no-ops on nil,
@@ -85,6 +88,13 @@ type Gate struct {
 	verifiers map[string]payment.Verifier
 	grants    *payment.GrantStore
 	payLimit  *payment.Limiter
+
+	identityIPWarning sync.Once
+}
+
+type crawlerVerifier interface {
+	Claim(string) string
+	Verify(context.Context, string, netip.Addr) crawler.Verdict
 }
 
 // New builds a Gate from validated config.
@@ -137,6 +147,11 @@ func New(cfg *config.Config, lg *slog.Logger) (*Gate, error) {
 		return nil, err
 	}
 	met := newGateMetrics()
+	crawlers, err := crawler.New(cfg.Bypass.VerifiedCrawlers)
+	if err != nil {
+		return nil, err
+	}
+	crawlers.RegisterMetrics(met.registry)
 	g := &Gate{
 		cfg:         cfg,
 		lg:          lg,
@@ -151,6 +166,7 @@ func New(cfg *config.Config, lg *slog.Logger) (*Gate, error) {
 		pages:       newPageSource(cfg.Pages),
 		now:         time.Now,
 		met:         met,
+		crawlers:    crawlers,
 	}
 	g.solverJS, g.solverURL = buildSolver(cfg.AllowInsecureContext)
 	if cfg.Payments != nil {
@@ -428,7 +444,30 @@ func (g *Gate) serve(w http.ResponseWriter, q *gateRequest) decision {
 		return decisionCORSPreflight
 	}
 
-	// 3. A valid pass whose scope covers this path.
+	// 3. A claimed crawler is authenticated before passes and payment. Verified
+	// crawlers bypass every route; a spoofed claim is never offered x402.
+	if q.facts.crawlerClaim != "" && q.clientIP.IsValid() {
+		switch g.crawlers.Verify(r.Context(), q.facts.crawlerClaim, q.clientIP) {
+		case crawler.Verified:
+			r.Header.Set("X-Anteroom-Status", "bypass-crawler-"+q.facts.crawlerClaim)
+			g.forward(w, r)
+			return decisionBypassCrawler
+		case crawler.Indeterminate:
+			serveCrawlerVerificationUnavailable(w)
+			return decisionCrawlerVerificationUnavailable
+		default:
+			g.serveRefusal(w, r)
+			return decisionCrawlerUnverified
+		}
+	}
+
+	// A claim with no resolved peer follows the ordinary ladder rather than
+	// telling a real crawler the site is temporarily unavailable forever because
+	// of local proxy configuration.
+	if q.facts.crawlerClaim != "" {
+		g.warnIdentityIP(r)
+	}
+	// 4. A valid pass whose scope covers this path.
 	if p, ok := g.validPass(r); ok && g.scopeCovers(p, r.URL.Path) {
 		r.Header.Set("X-Anteroom-Status", "pass-"+string(p.Kind))
 		g.stripPassCookie(r)
@@ -478,6 +517,13 @@ func (g *Gate) serve(w http.ResponseWriter, q *gateRequest) decision {
 	}
 	g.serveRefusal(w, r)
 	return decisionRefusal
+}
+
+func (g *Gate) warnIdentityIP(r *http.Request) {
+	g.identityIPWarning.Do(func() {
+		g.lg.WarnContext(r.Context(), "machine identity verification skipped: client IP unavailable",
+			"remote_addr", r.RemoteAddr)
+	})
 }
 
 // serveUpstream proxies an admitted request, injecting the renewal script into

@@ -90,6 +90,13 @@ func challengeRequired(w http.ResponseWriter) {
 	w.Header().Set(actionHeader, "challenge")
 }
 
+func serveCrawlerVerificationUnavailable(w http.ResponseWriter) {
+	noStore(w)
+	w.Header().Set(actionHeader, "crawler-verification-unavailable")
+	w.Header().Set("Retry-After", "60")
+	http.Error(w, "temporarily unable to verify crawler identity", http.StatusServiceUnavailable)
+}
+
 // serveSchema hands out the offer extension's JSON Schema — the target of the
 // $ref every PAYMENT-REQUIRED offer carries. Cacheable for an hour: the
 // document changes only when the binary does, and it is advisory field

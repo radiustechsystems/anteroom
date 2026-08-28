@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -161,6 +162,35 @@ paths = ["/*"]
 price = "$0.01"
 paid_ttl = "1h"
 `
+
+func TestVerifiedCrawlerBypassesPaidRoute(t *testing.T) {
+	g, _ := payGate(t, oneRule+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`, nil)
+	g.crawlers = &testCrawlerVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	r := agentReq("/report")
+	r.RemoteAddr = "192.0.2.2:1234"
+	r.Header.Set("User-Agent", "Googlebot/2.1")
+	w := do(g, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("verified crawler did not bypass paid route: %d %q", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get(payment.HeaderRequired); got != "" {
+		t.Fatalf("verified crawler received a payment offer: %q", got)
+	}
+
+	spoof := agentReq("/report")
+	spoof.RemoteAddr = "192.0.2.3:1234"
+	spoof.Header.Set("User-Agent", "Googlebot/2.1")
+	w = do(g, spoof)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("spoofed crawler status = %d, want 403", w.Code)
+	}
+	if got := w.Header().Get(payment.HeaderRequired); got != "" {
+		t.Fatalf("spoofed crawler received a payment offer: %q", got)
+	}
+}
 
 // facFake is one fake facilitator with per-endpoint counters, for tests that
 // need to know WHICH facilitator was called.

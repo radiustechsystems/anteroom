@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,9 +21,37 @@ import (
 
 	"github.com/radiustechsystems/anteroom/internal/challenge"
 	"github.com/radiustechsystems/anteroom/internal/config"
+	"github.com/radiustechsystems/anteroom/internal/crawler"
 	"github.com/radiustechsystems/anteroom/internal/payment"
 	"github.com/radiustechsystems/anteroom/internal/token"
 )
+
+type testCrawlerVerifier struct {
+	claim    string
+	verified netip.Addr
+	verdict  crawler.Verdict
+	calls    int
+}
+
+func (v *testCrawlerVerifier) Claim(userAgent string) string {
+	if v.claim != "" {
+		return v.claim
+	}
+	if strings.Contains(userAgent, "Googlebot/") {
+		return "googlebot"
+	}
+	return ""
+}
+func (v *testCrawlerVerifier) Verify(_ context.Context, _ string, addr netip.Addr) crawler.Verdict {
+	v.calls++
+	if v.verdict != 0 {
+		return v.verdict
+	}
+	if addr == v.verified {
+		return crawler.Verified
+	}
+	return crawler.Unverified
+}
 
 // newTestGate spins up an upstream that echoes a marker, and a gate in front
 // of it built from a config file body.
@@ -643,6 +673,85 @@ func TestAndroidWebViewPackageNameIsNotXHR(t *testing.T) {
 	w = do(g, xhr)
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "markdown") {
 		t.Fatalf("XHR got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
+func TestVerifiedCrawlerBypassesEveryRoute(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`)
+	verifier := &testCrawlerVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.crawlers = verifier
+
+	verified := agentReq("/article")
+	verified.RemoteAddr = "192.0.2.2:1234"
+	verified.Header.Set("User-Agent", "Googlebot/2.1")
+	w := do(g, verified)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("verified Googlebot was not proxied: %d %q", w.Code, w.Body.String())
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verified Googlebot caused %d verifier calls, want 1", verifier.calls)
+	}
+
+	spoof := agentReq("/article")
+	spoof.RemoteAddr = "192.0.2.3:1234"
+	spoof.Header.Set("User-Agent", "Googlebot/2.1")
+	w = do(g, spoof)
+	if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+		t.Fatalf("unverified Googlebot response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+	}
+}
+
+func TestUnconfiguredCrawlerUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const ua = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+	pass := solveAndGetCookie(t, g, nil, func(r *http.Request) {
+		r.Header.Set("User-Agent", ua)
+	})
+	r := agentReq("/article")
+	r.Header.Set("User-Agent", ua)
+	r.AddCookie(pass)
+	w := do(g, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("unconfigured crawler did not use its valid pass: %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestConfiguredCrawlerWithUnresolvedClientUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"\n[bypass]\nverified_crawlers = [\"googlebot\"]\n")
+	g.crawlers = &testCrawlerVerifier{}
+	var logs bytes.Buffer
+	g.lg = slog.New(slog.NewTextHandler(&logs, nil))
+	r := agentReq("/article")
+	r.RemoteAddr = "not-an-address"
+	r.Header.Set("User-Agent", "Googlebot/2.1")
+	for range 2 {
+		w := do(g, r)
+		if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+			t.Fatalf("unresolved crawler response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+		}
+	}
+	if got := strings.Count(logs.String(), "machine identity verification skipped"); got != 1 {
+		t.Fatalf("warning count = %d, want one; logs: %s", got, logs.String())
+	}
+}
+
+func TestCrawlerVerificationFailureIsTemporary(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`)
+	g.crawlers = &testCrawlerVerifier{verdict: crawler.Indeterminate}
+	r := agentReq("/article")
+	r.Header.Set("User-Agent", "Googlebot/2.1")
+	w := do(g, r)
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "60" {
+		t.Fatalf("verification failure = %d Retry-After %q", w.Code, w.Header().Get("Retry-After"))
+	}
+	if w.Header().Get(actionHeader) != "crawler-verification-unavailable" {
+		t.Fatalf("verification failure marker = %q", w.Header().Get(actionHeader))
 	}
 }
 

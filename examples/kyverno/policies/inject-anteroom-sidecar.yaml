@@ -13,13 +13,15 @@
 # treats an unknown config key as a startup error: a gate proxying to the wrong
 # port fails as "the site is down", which is a worse place to find the typo.
 #
-# The sidecar is injected as a NATIVE sidecar — an initContainer with
-# restartPolicy: Always — which requires Kubernetes 1.29+. That buys correct
-# ordering for free: the gate starts before the app's containers and, on pod
-# shutdown, outlives them, so there is no window where the Service routes to a
-# pod whose gate is gone while the app still answers. On an older cluster, move
-# the container spec unchanged from initContainers to containers; everything
-# else here still applies.
+# The gate is injected as an ordinary long-running container beside the app,
+# which works on any Kubernetes version. Startup ordering is handled by the
+# readiness probe rather than by the kubelet: until the gate answers
+# /.anteroom/healthz the pod is not Ready and the Service sends it nothing, so
+# there is no window where traffic routes to a pod whose gate is absent. On
+# Kubernetes 1.29+ the same spec can instead be placed under initContainers
+# with restartPolicy: Always — the "native sidecar" pattern, which still runs
+# for the pod's whole life as a proxy but adds guaranteed start-before-app and
+# stop-after-app ordering; everything else here is unchanged either way.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -29,9 +31,9 @@ metadata:
     policies.kyverno.io/category: Anteroom
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
-      Injects an Anteroom proof-of-work gate as a native sidecar into pods
-      labeled anteroom.radiustech.xyz/inject=enabled, proxying to the port
-      named by the anteroom.radiustech.xyz/upstream-port annotation.
+      Injects an Anteroom proof-of-work gate as a sidecar proxy container
+      into pods labeled anteroom.radiustech.xyz/inject=enabled, proxying to
+      the port named by the anteroom.radiustech.xyz/upstream-port annotation.
     # Mutate the POD, not the workload that owns it. By default Kyverno
     # auto-generates counterpart rules that would rewrite the Deployment's own
     # template at admission — which works, but then every `kubectl diff`, Argo
@@ -84,26 +86,20 @@ spec:
             value: ""
           # Idempotence: a pod that already carries the gate (hand-written, or
           # admitted before a policy change) is left alone rather than given a
-          # second one that would fight the first for :8080. The || `[]` keeps
-          # the JMESPath total on the common case of a pod with no
-          # initContainers at all, where the field is null rather than empty.
-          - key: "{{ request.object.spec.initContainers[?name=='anteroom'] || `[]` | length(@) }}"
+          # second one that would fight the first for :8080.
+          - key: "{{ request.object.spec.containers[?name=='anteroom'] || `[]` | length(@) }}"
             operator: Equals
             value: 0
       mutate:
         patchStrategicMerge:
           spec:
-            initContainers:
+            containers:
               - name: anteroom
                 # :latest is right for trying this and wrong in front of a real
                 # site — with imagePullPolicy: Always a pod reschedule can
                 # change the gate. Pin a digest or a minor version in
                 # production; docs/docker.md#which-tag is the policy.
                 image: ghcr.io/radiustechsystems/anteroom:latest
-                # What makes this a native sidecar rather than an init step:
-                # the kubelet starts it, waits for readiness, then starts the
-                # app; on shutdown it is stopped last. Kubernetes 1.29+.
-                restartPolicy: Always
                 ports:
                   # The NAME is load-bearing: the companion Service policy
                   # rewrites every Service targetPort to "anteroom", and a

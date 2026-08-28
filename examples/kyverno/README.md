@@ -10,7 +10,7 @@ Three policies, one job each:
 
 | Policy | Acts on | What it does |
 | --- | --- | --- |
-| [`policies/inject-anteroom-sidecar.yaml`](policies/inject-anteroom-sidecar.yaml) | Pods | injects the gate as a native sidecar, proxying to `127.0.0.1:<upstream-port>` |
+| [`policies/inject-anteroom-sidecar.yaml`](policies/inject-anteroom-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
 | [`policies/route-service-through-anteroom.yaml`](policies/route-service-through-anteroom.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
 | [`policies/generate-anteroom-config.yaml`](policies/generate-anteroom-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
 
@@ -47,7 +47,7 @@ and neither policy needs the other's numbers.
 
 ## Try it
 
-Requirements: a cluster on Kubernetes 1.29+ (native sidecars), Kyverno 1.11+
+Requirements: a cluster, Kyverno 1.11+
 installed ([their quick start](https://kyverno.io/docs/installation/)), and a
 place to put the source Secret. With [kind](https://kind.sigs.k8s.io):
 
@@ -84,7 +84,7 @@ The Compose example's rule — verify the topology rather than trusting it —
 translates directly:
 
 ```sh
-# The pod runs two containers, the sidecar as a restartable initContainer:
+# The pod runs two containers, the app and the injected gate:
 kubectl -n hello get pods
 # NAME                        READY   STATUS    RESTARTS
 # hello-app-xxxxxxxxx-xxxxx   2/2     Running   0
@@ -120,11 +120,16 @@ file-based `[[hmac_keys]]` to one of them.
 
 ## What the policies decide, and why
 
-**Native sidecar (`initContainers` + `restartPolicy: Always`).** The kubelet
-starts the gate before the app and stops it after, so there is no window where
-the Service routes to a pod whose gate is absent while the app still answers.
-Requires Kubernetes 1.29+; on older clusters move the container spec unchanged
-into `containers`.
+**An ordinary container, ordered by readiness.** The gate is a second entry in
+`containers`, running as a long-lived proxy beside the app, and its readiness
+probe is what sequences traffic: until the gate answers `/.anteroom/healthz`
+the pod is not Ready and the Service sends it nothing, so there is no window
+where traffic routes to a pod whose gate is absent. On Kubernetes 1.29+ the
+same spec also works under `initContainers` with `restartPolicy: Always` — the
+"native sidecar" pattern, which still runs for the pod's whole life but adds
+kubelet-guaranteed start-before-app and stop-after-app ordering, useful if the
+app itself dials out through a proxy at startup. Anteroom doesn't need that,
+so the policy stays with the portable shape.
 
 **Pods are mutated, not Deployments.** The policy sets
 `pod-policies.kyverno.io/autogen-controllers: none`, so the Deployment in git

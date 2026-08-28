@@ -20,10 +20,14 @@ kind: ClusterRole
 metadata:
   name: kyverno:generate-anteroom
   labels:
-    # This label is the mechanism: Kyverno's background-controller ClusterRole
-    # aggregates every ClusterRole carrying it.
+    # These labels are the mechanism: each Kyverno controller's ClusterRole
+    # aggregates every ClusterRole carrying its label. The background
+    # controller does the generating; the admission controller must ALSO be
+    # able to read what a clone rule copies — its policy-validation webhook
+    # checks that at apply time and refuses the policy otherwise, naming the
+    # exact permission it wants.
     rbac.kyverno.io/aggregate-to-background-controller: "true"
-    app.kubernetes.io/component: background-controller
+    rbac.kyverno.io/aggregate-to-admission-controller: "true"
     app.kubernetes.io/part-of: kyverno
 rules:
   - apiGroups: [""]

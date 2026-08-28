@@ -52,9 +52,10 @@ and neither policy needs the other's numbers.
 ## Try it
 
 The script does everything on a local kind cluster — creates it, installs
-Kyverno, builds and loads `hello-app`, mints the signing key, applies
-`manifests/`, verifies the Service was rewritten, and starts port-forwards
-(requires docker, kind, kubectl, helm, openssl):
+Kyverno, builds the gate and `hello-app` from this checkout and loads them,
+mints the signing key, applies `manifests/`, verifies the Service was
+rewritten, and starts port-forwards (requires docker, kind, kubectl, helm,
+openssl):
 
 ```sh
 ./scripts/kind-demo.sh

@@ -48,10 +48,10 @@ spec:
               selector:
                 matchLabels:
                   anteroom.radiustech.xyz/inject: enabled
-      # Namespaces labeled before this policy existed get the resources too,
-      # not only ones admitted after it.
-      generateExisting: true
       generate:
+        # Namespaces labeled before this policy existed get the resources
+        # too, not only ones admitted after it.
+        generateExisting: true
         apiVersion: v1
         kind: ConfigMap
         name: anteroom-config
@@ -136,8 +136,8 @@ spec:
               selector:
                 matchLabels:
                   anteroom.radiustech.xyz/inject: enabled
-      generateExisting: true
       generate:
+        generateExisting: true
         apiVersion: v1
         kind: Secret
         name: anteroom

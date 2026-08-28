@@ -100,6 +100,12 @@ spec:
                 # change the gate. Pin a digest or a minor version in
                 # production; docs/docker.md#which-tag is the policy.
                 image: ghcr.io/radiustechsystems/anteroom:latest
+                # IfNotPresent, not the Always that a :latest tag defaults to.
+                # Always makes every pod start a registry round-trip and
+                # ignores images loaded directly onto nodes (`kind load`,
+                # air-gapped mirrors) — the demo script depends on this line.
+                # With a pinned digest, the two policies behave identically.
+                imagePullPolicy: IfNotPresent
                 ports:
                   # The NAME is load-bearing: the companion Service policy
                   # rewrites every Service targetPort to "anteroom", and a

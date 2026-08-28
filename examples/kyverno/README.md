@@ -6,21 +6,24 @@ policy: label a workload and [Kyverno](https://kyverno.io) injects the gate,
 rewires the Service through it, and provisions the config and signing key the
 sidecar mounts — the application manifests never mention Anteroom at all.
 
-Three policies, one job each:
+The policies themselves live in the
+[`charts/kyverno-policies`](../../charts/kyverno-policies/) Helm chart at the
+repository root — its README documents the opt-in labels and annotations and
+every value. Three policies, one job each:
 
 | Policy | Acts on | What it does |
 | --- | --- | --- |
-| [`manifests/policies/inject-anteroom-sidecar.yaml`](manifests/policies/inject-anteroom-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
-| [`manifests/policies/route-service-through-anteroom.yaml`](manifests/policies/route-service-through-anteroom.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
-| [`manifests/policies/generate-anteroom-config.yaml`](manifests/policies/generate-anteroom-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
+| [`inject-anteroom-sidecar`](../../charts/kyverno-policies/templates/clusterpolicy-inject-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
+| [`route-service-through-anteroom`](../../charts/kyverno-policies/templates/clusterpolicy-route-service.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
+| [`generate-anteroom-config`](../../charts/kyverno-policies/templates/clusterpolicy-generate-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
 
-Plus [`manifests/policies/rbac.yaml`](manifests/policies/rbac.yaml), the grant
-Kyverno's background controller needs to create what the generate policy
-declares; [`manifests/demo/`](manifests/demo/), a two-replica `hello-app`
-behind the gate; and [`scripts/kind-demo.sh`](scripts/kind-demo.sh), which
-stands the whole thing up on a local [kind](https://kind.sigs.k8s.io) cluster
-and leaves you with port-forwards to the gate, its metrics, and the ungated
-upstream.
+Plus the chart's [`rbac.yaml`](../../charts/kyverno-policies/templates/rbac.yaml),
+the grant Kyverno's controllers need for what the generate policy manages.
+This directory holds what the chart deliberately leaves out:
+[`manifests/demo/`](manifests/demo/), a two-replica `hello-app` behind the
+gate, and [`scripts/kind-demo.sh`](scripts/kind-demo.sh), which stands the
+whole thing up on a local [kind](https://kind.sigs.k8s.io) cluster and leaves
+you with port-forwards to the gate, its metrics, and the ungated upstream.
 
 ## The opt-in surface
 
@@ -53,9 +56,9 @@ and neither policy needs the other's numbers.
 
 The script does everything on a local kind cluster — creates it, installs
 Kyverno, builds the gate and `hello-app` from this checkout and loads them,
-mints the signing key, applies `manifests/`, verifies the Service was
-rewritten, and starts port-forwards (requires docker, kind, kubectl, helm,
-openssl):
+mints the signing key, installs the policies chart, applies the demo,
+verifies the Service was rewritten, and starts port-forwards (requires
+docker, kind, kubectl, helm, openssl):
 
 ```sh
 ./scripts/kind-demo.sh
@@ -89,13 +92,19 @@ kubectl -n anteroom-system create secret generic anteroom \
   --from-literal=hmac-key="$(openssl rand -base64 32)"
 ```
 
-Apply the policies, then the demo (on kind, first
+Install the policies chart, then apply the demo (on kind, first
 `docker build -t hello-app:local ../hello-app && kind load docker-image hello-app:local`):
 
 ```sh
-kubectl apply -f manifests/policies/
+helm install anteroom-policies ../../charts/kyverno-policies -n kyverno
 kubectl apply -f manifests/demo/
 ```
+
+If the install is refused with a Kyverno message naming a missing
+Secret/ConfigMap permission, the chart's ClusterRole had not finished
+aggregating into Kyverno's roles when the policy arrived — aggregation is
+asynchronous. Re-run the same command a moment later (as
+`helm upgrade --install`, which also recovers the failed release).
 
 ## Check that the gate is actually in the path
 

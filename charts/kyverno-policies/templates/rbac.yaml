@@ -1,0 +1,32 @@
+{{- /*
+Permissions for the generate policy.
+
+Kyverno deliberately ships with almost no rights of its own — you grant
+exactly what your policies generate, via ClusterRoles labeled for
+aggregation. Two controllers need this grant: the background controller does
+the generating, and the admission controller must be able to read what a
+clone rule copies — its policy-validation webhook checks that at apply time
+and refuses the policy otherwise.
+
+Secrets are the sensitive half: the background controller can then read and
+write Secrets in every namespace, which is inherent to cloning a key across
+namespaces — the controller that copies a secret must be allowed to hold it.
+If that is too broad for your cluster, set hmacSecret.clone=false, distribute
+the key another way, and narrow this role.
+*/ -}}
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:generate-anteroom
+  labels:
+    # These labels are the mechanism: each Kyverno controller's ClusterRole
+    # aggregates every ClusterRole carrying its label.
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+    rbac.kyverno.io/aggregate-to-admission-controller: "true"
+    {{- include "kyverno-policies.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch, create, update, delete]
+{{- end }}

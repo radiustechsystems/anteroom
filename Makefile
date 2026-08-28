@@ -22,6 +22,8 @@ help:
 	@echo "acceptance-browser tier 2 in a real browser (needs Playwright)"
 	@echo "example-up         run the reference deployment at localhost:8080"
 	@echo "example-down       tear it down"
+	@echo "helm-lint          lint the charts in charts/"
+	@echo "helm-docs          regenerate each chart's README from its values.yaml"
 	@echo "clean-acceptance   remove containers left by an interrupted run"
 
 .PHONY: check
@@ -73,6 +75,17 @@ example-up:
 .PHONY: example-down
 example-down:
 	docker compose -f examples/anteroomized/compose.yaml down --volumes
+
+# Chart READMEs are generated: prose lives in README.md.gotmpl, the values
+# table in values.yaml's `# --` comments. Edit those, never README.md itself.
+# helm-docs: https://github.com/norwoodj/helm-docs
+.PHONY: helm-docs
+helm-docs:
+	helm-docs --chart-search-root charts
+
+.PHONY: helm-lint
+helm-lint:
+	@for c in charts/*/; do helm lint "$$c" || exit 1; done
 
 .PHONY: clean-acceptance
 clean-acceptance:

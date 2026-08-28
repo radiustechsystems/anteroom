@@ -6,7 +6,7 @@
 #   2. install Kyverno via Helm
 #   3. build the gate and hello-app from this checkout, load them into the cluster
 #   4. mint the HMAC key Secret the generate policy clones
-#   5. apply manifests/ — RBAC, then policies, then the demo workload
+#   5. install the charts/kyverno-policies chart, then apply the demo workload
 #   6. start port-forwards and print where everything is reachable
 #
 # The script is idempotent: run it again and every step that is already done
@@ -90,19 +90,24 @@ else
 fi
 
 say "policies"
-# rbac.yaml first, and not just first in the directory: Kyverno's
-# policy-validation webhook refuses the generate policy until the controllers
-# hold the permissions it needs, and the grant lands via ClusterRole
-# aggregation, which is asynchronous — so wait until the aggregated
-# permission is actually visible before applying the policies.
-kubectl apply -f "$EXAMPLE_DIR/manifests/policies/rbac.yaml"
-for _ in $(seq 1 30); do
-  kubectl auth can-i list secrets \
-    --as=system:serviceaccount:kyverno:kyverno-admission-controller \
-    >/dev/null 2>&1 && break
-  sleep 2
+# The policies ship as the charts/kyverno-policies Helm chart. Its ClusterRole
+# and ClusterPolicies install together, and Kyverno's policy-validation
+# webhook refuses the generate policy until that role has aggregated into
+# Kyverno's own — an asynchronous step — so the first attempt can lose the
+# race. upgrade --install recovers its own failed release, which makes
+# "wait for the aggregated permission, then retry" the whole fix.
+for attempt in 1 2 3; do
+  helm upgrade --install anteroom-policies \
+    "$EXAMPLE_DIR/../../charts/kyverno-policies" -n kyverno && break
+  [ "$attempt" = 3 ] && { echo "policy install kept failing" >&2; exit 1; }
+  echo "waiting for ClusterRole aggregation, then retrying..."
+  for _ in $(seq 1 30); do
+    kubectl auth can-i list secrets \
+      --as=system:serviceaccount:kyverno:kyverno-admission-controller \
+      >/dev/null 2>&1 && break
+    sleep 2
+  done
 done
-kubectl apply -f "$EXAMPLE_DIR/manifests/policies/"
 # Ready means the webhook rules are registered; without this wait the demo
 # namespace could race past an unconfigured webhook and come up ungated.
 kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s

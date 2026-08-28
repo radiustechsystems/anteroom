@@ -347,8 +347,9 @@ rollout.
 
 To run this shape as cluster policy instead of hand-wiring it per workload —
 Kyverno injecting the sidecar, rewriting the Service through it, and
-generating the mounted ConfigMap and Secret — see
-[`../examples/kyverno/`](../examples/kyverno/).
+generating the mounted ConfigMap and Secret — install the
+[`charts/kyverno-policies`](../charts/kyverno-policies/) Helm chart; the
+working end-to-end setup is [`../examples/kyverno/`](../examples/kyverno/).
 
 ## Building the image yourself
 

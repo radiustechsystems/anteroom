@@ -423,3 +423,7 @@ into a single word.
   algorithm for HTML injection.
 - [`docker.md`](docker.md) — the container contract, and the same topology with
   Caddy in a sibling container.
+- [`../examples/caddy-tls/`](../examples/caddy-tls/) — that Caddy topology as a
+  working deployment. Worth a look even if you are staying on nginx: it lists
+  which of the settings above Caddy does by default, and which one (rate
+  limiting) it does not do at all.

@@ -145,8 +145,12 @@ trusted_proxies = ["127.0.0.1/32"]    # whoever terminates TLS in front of you
 ```
 
 Omitting it costs the cookie's `Secure` flag and hides visitor IPs from your
-application. For a deployment reached over plain HTTP on a LAN (the common
-Docker-on-`192.168.x.y` case) there is an opt-in `allow_insecure_context = true`
+application. [`examples/caddy-tls/`](examples/caddy-tls/) is that topology as a
+working Compose deployment — Caddy gets the certificate by itself, so going live
+is one line of `.env` — and [`docs/nginx.md`](docs/nginx.md) has the nginx
+equivalent, including the php-fpm case where the gate goes in front of nginx
+rather than behind it. For a deployment reached over plain HTTP on a LAN (the
+common Docker-on-`192.168.x.y` case) there is an opt-in `allow_insecure_context = true`
 that ships a JavaScript SHA-256 instead; it is 10–50× slower per hash and that
 cost falls on the honest visitor, so it is a LAN convenience, not a public
 posture.

@@ -1,0 +1,95 @@
+# Caddy → Anteroom → hello-app: the production topology.
+#
+#   client ──► caddy :443 ──► anteroom :8080 ──► app :3000
+#              (TLS, public)   (no host port)    (no host port)
+#
+# Three rules, and the whole point is the second one:
+#   1. Caddy is the only service that publishes a port;
+#   2. Anteroom uses `expose`, so the only route to it is through Caddy;
+#   3. the app uses `expose` too, so the only route to it is through the gate.
+#
+# Verify rule 2 and 3 rather than trusting them — `docker compose ps` should
+# show host ports for `caddy` and none for `anteroom` or `app`. A gate reachable
+# on its own port is a gate that can be walked around by asking the port behind
+# it; an app reachable on its own port has a gate standing decoratively beside
+# it, not in front.
+
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      # Defaults are 8080/8443 so a trial needs no privileged port and no root.
+      # Going live means 80 and 443 in .env: ACME's HTTP-01 and TLS-ALPN
+      # challenges are only served on those two ports, by specification, so a
+      # public deployment on anything else gets no certificate.
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+      # HTTP/3. Harmless to publish and skippable; QUIC is UDP, hence the /udp.
+      - "${HTTPS_PORT:-8443}:443/udp"
+    environment:
+      # The one knob that decides whether this deployment has TLS. See the
+      # Caddyfile: a bare domain gets a real certificate automatically, and
+      # http://localhost gets none and needs none.
+      - SITE_ADDRESS=${SITE_ADDRESS:-http://localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates, private keys, and the ACME account key live here. This
+      # volume is the one piece of Caddy state worth keeping: lose it and every
+      # restart re-issues, which runs into Let's Encrypt's rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      anteroom:
+        condition: service_started
+    restart: unless-stopped
+
+  anteroom:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: anteroom:local
+    # `expose`, not `ports`. Caddy reaches 8080 across the compose network;
+    # nothing on the host can. This line is the security boundary, and it is
+    # also what makes the broad trusted_proxies CIDR in anteroom.toml safe —
+    # nothing outside the network can reach the gate to lie to it.
+    expose:
+      - "8080"
+    volumes:
+      # Policy — TTLs, difficulty, trusted_proxies, the bypass list. Read-only:
+      # the gate never writes its config, and a container that cannot modify
+      # its own policy is one less thing to reason about.
+      - ./anteroom.toml:/etc/anteroom/anteroom.toml:ro
+      # Required when payments are enabled. Harmless for this PoW-only example,
+      # and keeps the read-only-root topology ready for a [payments] block.
+      - anteroom_state:/var/lib/anteroom
+    environment:
+      # The only secret here, and the only thing not in the committed config.
+      # Passes are stateless signed cookies, so this key is all a fleet shares.
+      # Without it one is generated per process: passes die on every restart and
+      # no second replica can verify them. Supplied from .env; see README.md.
+      - ANTEROOM_HMAC_KEY=${ANTEROOM_HMAC_KEY:?set ANTEROOM_HMAC_KEY — see README.md}
+      # `upstream` is in anteroom.toml rather than here, deliberately: the
+      # topology belongs in the reviewed file, the secret belongs in the
+      # environment. ANTEROOM_UPSTREAM would override the file if you set it.
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build: ../hello-app
+    image: hello-app:local
+    expose:
+      - "3000"
+    environment:
+      - HELLO_LISTEN=:3000
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  anteroom_state:

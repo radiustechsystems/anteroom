@@ -68,6 +68,15 @@ spec:
               # nothing but the sidecar's own namespace.
               listen = ":8080"
 
+              # The operator port: /metrics (Prometheus text), /stats, and
+              # /healthz. It is UNAUTHENTICATED — reachability is the access
+              # control — so it stays on the pod's loopback, where nothing on
+              # the cluster network can reach it but `kubectl port-forward`
+              # still can (port-forward dials localhost inside the pod's own
+              # namespace). Widen to ":8090" only when an in-cluster scraper
+              # must reach it, and know that metrics reveal traffic volumes.
+              admin_listen = "127.0.0.1:8090"
+
               # `upstream` is deliberately absent: it is 127.0.0.1:<port> and
               # the port differs per workload, so the injection policy supplies
               # it as ANTEROOM_UPSTREAM from the pod's upstream-port

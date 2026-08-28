@@ -10,13 +10,17 @@ Three policies, one job each:
 
 | Policy | Acts on | What it does |
 | --- | --- | --- |
-| [`policies/inject-anteroom-sidecar.yaml`](policies/inject-anteroom-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
-| [`policies/route-service-through-anteroom.yaml`](policies/route-service-through-anteroom.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
-| [`policies/generate-anteroom-config.yaml`](policies/generate-anteroom-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
+| [`manifests/policies/inject-anteroom-sidecar.yaml`](manifests/policies/inject-anteroom-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
+| [`manifests/policies/route-service-through-anteroom.yaml`](manifests/policies/route-service-through-anteroom.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
+| [`manifests/policies/generate-anteroom-config.yaml`](manifests/policies/generate-anteroom-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
 
-Plus [`policies/rbac.yaml`](policies/rbac.yaml), the grant Kyverno's
-background controller needs to create what the generate policy declares, and
-[`demo/`](demo/), a two-replica `hello-app` behind the gate.
+Plus [`manifests/policies/rbac.yaml`](manifests/policies/rbac.yaml), the grant
+Kyverno's background controller needs to create what the generate policy
+declares; [`manifests/demo/`](manifests/demo/), a two-replica `hello-app`
+behind the gate; and [`scripts/kind-demo.sh`](scripts/kind-demo.sh), which
+stands the whole thing up on a local [kind](https://kind.sigs.k8s.io) cluster
+and leaves you with port-forwards to the gate, its metrics, and the ungated
+upstream.
 
 ## The opt-in surface
 
@@ -47,23 +51,36 @@ and neither policy needs the other's numbers.
 
 ## Try it
 
-Requirements: a cluster, Kyverno 1.11+
-installed ([their quick start](https://kyverno.io/docs/installation/)), and a
-place to put the source Secret. With [kind](https://kind.sigs.k8s.io):
+The script does everything on a local kind cluster — creates it, installs
+Kyverno, builds and loads `hello-app`, mints the signing key, applies
+`manifests/`, verifies the Service was rewritten, and starts port-forwards
+(requires docker, kind, kubectl, helm, openssl):
 
 ```sh
-kind create cluster
-helm repo add kyverno https://kyverno.github.io/kyverno/
-helm install kyverno kyverno/kyverno -n kyverno --create-namespace
-
-# Build the demo app and hand it to the cluster.
-docker build -t hello-app:local ../hello-app
-kind load docker-image hello-app:local
+./scripts/kind-demo.sh
 ```
 
-Mint the deployment key once, into the namespace the generate policy clones
-from. Keep it out of manifests and repositories — a committed key is a
-published key:
+It ends with three port-forwards running and says so:
+
+| Local | What it reaches |
+| --- | --- |
+| `http://localhost:8080` | the gated site: Service → gate → app. Browse it for the wait page and the ~1 s puzzle. |
+| `http://localhost:8090/metrics` | the sidecar's admin listener (`/metrics`, `/stats`, `/healthz`), bound to the pod's loopback and reachable only this way |
+| `http://localhost:3000` | `hello-app` directly, bypassing the gate — the cluster-internal side door made visible |
+
+Ctrl-C stops the forwards and leaves the cluster;
+`kind delete cluster --name anteroom-demo` removes it. The script is
+idempotent — re-running skips whatever already exists (including the key: a
+rotated key would wall every visitor holding a pass) and returns to the
+port-forwards.
+
+### Or by hand
+
+Any cluster with Kyverno 1.11+
+([their quick start](https://kyverno.io/docs/installation/)) works. Mint the
+deployment key once, into the namespace the generate policy clones from —
+keep it out of manifests and repositories, a committed key is a published
+key:
 
 ```sh
 kubectl create namespace anteroom-system
@@ -71,11 +88,12 @@ kubectl -n anteroom-system create secret generic anteroom \
   --from-literal=hmac-key="$(openssl rand -base64 32)"
 ```
 
-Apply the policies, then the demo:
+Apply the policies, then the demo (on kind, first
+`docker build -t hello-app:local ../hello-app && kind load docker-image hello-app:local`):
 
 ```sh
-kubectl apply -f policies/
-kubectl apply -f demo/
+kubectl apply -f manifests/policies/
+kubectl apply -f manifests/demo/
 ```
 
 ## Check that the gate is actually in the path
@@ -103,14 +121,16 @@ kubectl -n hello run probe --rm -it --restart=Never --image=curlimages/curl \
 # HTTP/1.1 401 Unauthorized
 ```
 
-Then see it as a visitor. Port-forwarding lands on `localhost`, which is a
-secure context, so the puzzle runs and the wait page resolves into the app in
-about a second:
+Then see it as a visitor — the script's port-forward is already running, or
+by hand:
 
 ```sh
 kubectl -n hello port-forward svc/hello-app 8080:80
 # browse http://localhost:8080
 ```
+
+Port-forwarding lands on `localhost`, which is a secure context, so the
+puzzle runs and the wait page resolves into the app in about a second.
 
 Reload a few times: the demo runs two replicas, and not being asked to solve
 again on every other request is the observable proof that both gates hold the
@@ -151,6 +171,16 @@ namespace the same key, which is exactly right for replicas of one site and
 too much sharing if namespaces are your isolation boundary. In that case drop
 the clone rule and create per-namespace Secrets by hand — injection only
 requires a Secret named `anteroom` with key `hmac-key`.
+
+**The admin listener stays on the pod's loopback.** The generated config sets
+`admin_listen = "127.0.0.1:8090"`, so `/metrics`, `/stats`, and `/healthz`
+exist but nothing on the cluster network can reach them — the listener is
+unauthenticated, and reachability is its only access control. `kubectl
+port-forward` still works because it dials localhost inside the pod's own
+network namespace, which is exactly the seam the script's metrics forward
+uses. An in-cluster Prometheus needs the listener widened to `":8090"` in the
+generated TOML — a deliberate trade, made in the one file the fleet shares,
+knowing metrics reveal traffic volumes.
 
 **Probes keep working, and that is not a bypass hole.** The kubelet dials the
 app's `containerPort` from inside the node, never through the Service, so app

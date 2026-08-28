@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"net/url"
 	"path"
 	"sort"
@@ -90,11 +89,6 @@ type Gate struct {
 	payLimit  *payment.Limiter
 
 	identityIPWarning sync.Once
-}
-
-type crawlerVerifier interface {
-	Claim(string) string
-	Verify(context.Context, string, netip.Addr) crawler.Verdict
 }
 
 // New builds a Gate from validated config.
@@ -444,29 +438,12 @@ func (g *Gate) serve(w http.ResponseWriter, q *gateRequest) decision {
 		return decisionCORSPreflight
 	}
 
-	// 3. A claimed crawler is authenticated before passes and payment. Verified
-	// crawlers bypass every route; a spoofed claim is never offered x402.
-	if q.facts.crawlerClaim != "" && q.clientIP.IsValid() {
-		switch g.crawlers.Verify(r.Context(), q.facts.crawlerClaim, q.clientIP) {
-		case crawler.Verified:
-			r.Header.Set("X-Anteroom-Status", "bypass-crawler-"+q.facts.crawlerClaim)
-			g.forward(w, r)
-			return decisionBypassCrawler
-		case crawler.Indeterminate:
-			serveCrawlerVerificationUnavailable(w)
-			return decisionCrawlerVerificationUnavailable
-		default:
-			g.serveRefusal(w, r)
-			return decisionCrawlerUnverified
-		}
+	// 3. Authenticate claimed machine identities before passes and payment.
+	// Their protocols cannot complete x402, so spoofed claims fail closed.
+	if d, handled := g.serveClaimedIdentity(w, q); handled {
+		return d
 	}
 
-	// A claim with no resolved peer follows the ordinary ladder rather than
-	// telling a real crawler the site is temporarily unavailable forever because
-	// of local proxy configuration.
-	if q.facts.crawlerClaim != "" {
-		g.warnIdentityIP(r)
-	}
 	// 4. A valid pass whose scope covers this path.
 	if p, ok := g.validPass(r); ok && g.scopeCovers(p, r.URL.Path) {
 		r.Header.Set("X-Anteroom-Status", "pass-"+string(p.Kind))

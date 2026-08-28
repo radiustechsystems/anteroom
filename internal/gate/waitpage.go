@@ -251,11 +251,19 @@ func (g *Gate) serveInstructions(w http.ResponseWriter, r *http.Request) {
 // Deliberately omit WWW-Authenticate: 403 does not require it, and advertising
 // a Payment scheme there makes some agent clients mistake x402 for HTTP auth.
 func (g *Gate) serveRefusal(w http.ResponseWriter, r *http.Request) {
-	challengeRequired(w)
 	status := http.StatusForbidden
 	if g.okBodyAgent(r) {
 		status = http.StatusOK
 	}
+	g.renderRefusal(w, r, status)
+}
+
+func (g *Gate) serveStrictRefusal(w http.ResponseWriter, r *http.Request) {
+	g.renderRefusal(w, r, http.StatusForbidden)
+}
+
+func (g *Gate) renderRefusal(w http.ResponseWriter, r *http.Request, status int) {
+	challengeRequired(w)
 
 	if g.cfg.Triage.JSONAccept && wantsJSON(r) {
 		w.Header().Set("Content-Type", "application/json")

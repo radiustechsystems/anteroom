@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"github.com/radiustechsystems/anteroom/internal/hosted"
 )
 
 // requestFacts is the immutable, header-derived view of a request. Parsing it
@@ -15,6 +17,7 @@ type requestFacts struct {
 	navigation   bool
 	preflight    bool
 	crawlerClaim string
+	hostedClaim  hosted.Provider
 }
 
 // gateRequest adds facts that need Gate state to resolve. Embedding the ordinary
@@ -53,6 +56,7 @@ func inspectRequest(r *http.Request, crawlerClaim string) requestFacts {
 		userAgent:    r.Header.Get("User-Agent"),
 		preflight:    isCORSPreflight(r),
 		crawlerClaim: crawlerClaim,
+		hostedClaim:  hosted.Claim(r.Header.Get("User-Agent")),
 	}
 	facts.navigation = classifyNavigation(r, facts, accept, isFragmentRequest(r))
 	return facts

@@ -22,6 +22,7 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/challenge"
 	"github.com/radiustechsystems/anteroom/internal/config"
 	"github.com/radiustechsystems/anteroom/internal/crawler"
+	"github.com/radiustechsystems/anteroom/internal/hosted"
 	"github.com/radiustechsystems/anteroom/internal/payment"
 	"github.com/radiustechsystems/anteroom/internal/token"
 )
@@ -42,6 +43,17 @@ func (v *testCrawlerVerifier) Claim(userAgent string) string {
 	}
 	return ""
 }
+
+type testHostedVerifier struct {
+	verified netip.Addr
+	calls    int
+}
+
+func (v *testHostedVerifier) Verify(_ hosted.Provider, addr netip.Addr) bool {
+	v.calls++
+	return addr == v.verified
+}
+
 func (v *testCrawlerVerifier) Verify(_ context.Context, _ string, addr netip.Addr) crawler.Verdict {
 	v.calls++
 	if v.verdict != 0 {
@@ -752,6 +764,82 @@ verified_crawlers = ["googlebot"]
 	}
 	if w.Header().Get(actionHeader) != "crawler-verification-unavailable" {
 		t.Fatalf("verification failure marker = %q", w.Header().Get(actionHeader))
+	}
+}
+
+func TestHostedFetcherRequiresPublishedSource(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	verifier := &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.hosted = verifier
+
+	for _, ua := range []string{
+		"Mozilla/5.0 (compatible; Claude-User/1.0; +claude-user@anthropic.com)",
+		"Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)",
+		"Mozilla/5.0 (compatible; Google-Agent; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-agent)",
+	} {
+		r := agentReq("/article")
+		r.RemoteAddr = "192.0.2.2:1234"
+		r.Header.Set("User-Agent", ua)
+		w := do(g, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+			t.Errorf("verified %q was not proxied: %d %q", ua, w.Code, w.Body.String())
+		}
+	}
+	if verifier.calls != 3 {
+		t.Fatalf("verified fetchers caused %d verifier calls, want 3", verifier.calls)
+	}
+
+	spoof := agentReq("/article")
+	spoof.RemoteAddr = "192.0.2.3:1234"
+	spoof.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Claude-User/1.0; +claude-user@anthropic.com)")
+	w := do(g, spoof)
+	if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+		t.Fatalf("unverified hosted fetcher response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+	}
+}
+
+func TestHostedFetcherBypassCanBeDisabled(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"[triage]\nallow_hosted_fetchers = false\n")
+	g.hosted = &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	r := agentReq("/article")
+	r.RemoteAddr = "192.0.2.2:1234"
+	r.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)")
+	if w := do(g, r); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("disabled hosted bypass returned %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestHostedFetcherWithUnresolvedClientUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	g.hosted = &testHostedVerifier{}
+	var logs bytes.Buffer
+	g.lg = slog.New(slog.NewTextHandler(&logs, nil))
+	r := agentReq("/article")
+	r.RemoteAddr = "not-an-address"
+	r.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)")
+	for range 2 {
+		w := do(g, r)
+		if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+			t.Fatalf("unresolved hosted fetcher = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+		}
+	}
+	if got := strings.Count(logs.String(), "machine identity verification skipped"); got != 1 {
+		t.Fatalf("warning count = %d, want one; logs: %s", got, logs.String())
+	}
+}
+
+func TestCrawlerClaimPrecedesHostedClaim(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"\n[bypass]\nverified_crawlers = [\"googlebot\"]\n")
+	crawlers := &testCrawlerVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	hostedVerifier := &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.crawlers = crawlers
+	g.hosted = hostedVerifier
+	r := agentReq("/article")
+	r.RemoteAddr = "192.0.2.2:1234"
+	r.Header.Set("User-Agent", "Googlebot/2.1 Google-Agent;")
+	w := do(g, r)
+	if w.Code != http.StatusOK || crawlers.calls != 1 || hostedVerifier.calls != 0 {
+		t.Fatalf("crawler calls = %d, hosted calls = %d, status = %d", crawlers.calls, hostedVerifier.calls, w.Code)
 	}
 }
 

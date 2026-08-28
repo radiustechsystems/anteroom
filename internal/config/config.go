@@ -255,8 +255,9 @@ func (a *Activity) validate() error {
 }
 
 type Triage struct {
-	JSONAccept   bool     `toml:"json_accept"`
-	OKBodyAgents []string `toml:"ok_body_agents"`
+	JSONAccept          bool     `toml:"json_accept"`
+	OKBodyAgents        []string `toml:"ok_body_agents"`
+	AllowHostedFetchers bool     `toml:"allow_hosted_fetchers"`
 }
 
 // defaults returns a Config carrying every default the contract documents.
@@ -284,12 +285,12 @@ func defaults() Config {
 		Inject:          true,
 		Triage: Triage{
 			JSONAccept: true,
-			// Some agentic fetch tools discard the body of any non-2xx
-			// response, so a 401 carrying instructions is invisible to them —
-			// measured behavior, not a guess. For those clients the
-			// instructions are served with status 200 instead, which is the
-			// only way they see anything at all. Matched case-insensitively as
-			// a substring of the User-Agent.
+			// Verified vendor-hosted user fetchers cannot complete PoW or x402,
+			// so the current policy admits them even on paid routes. Operators
+			// can disable that exception and refuse them instead.
+			AllowHostedFetchers: true,
+			// Claude Code's fetch output omits non-2xx bodies. Matching its
+			// User-Agent here keeps Anteroom's instructions visible.
 			OKBodyAgents: []string{"claude-user"},
 		},
 	}

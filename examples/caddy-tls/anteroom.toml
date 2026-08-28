@@ -1,0 +1,120 @@
+# anteroom.toml — the gate, behind Caddy, in front of hello-app.
+#
+# This is a puzzle-only gate: there is no [payments] section at all. See
+# ../../anteroom.example.toml for the full annotated surface.
+#
+# Three keys here are decided by the topology — `listen`, `upstream` and
+# `trusted_proxies` — and everything else is a default, restated with the reason
+# it is the default. Two of the three are wrong out of the box for a container
+# behind a terminator, in a way that raises no error at all.
+
+# Not 127.0.0.1:8080. Caddy is a different container, so the gate must accept
+# connections from the compose network — and it is safe to widen precisely
+# because compose.yaml gives this service `expose` rather than `ports`, so the
+# network is the only place the connection can come from.
+listen = ":8080"
+
+# The compose service name, not localhost: in compose the app is a different
+# host. (In a Kubernetes sidecar it would be 127.0.0.1:3000, because containers
+# in a pod share a network namespace. That is the single most common copy-paste
+# error between the two.)
+upstream = "app:3000"
+
+# REQUIRED in this topology, and the reason to read this file. It names the
+# peers whose X-Forwarded-For the gate believes; Caddy sets that header, and
+# without this setting the gate treats Caddy itself as the visitor. Three
+# things then break, none of them loudly:
+#
+#   - the pass cookie loses its Secure flag, because X-Forwarded-Proto: https
+#     from an untrusted peer is (correctly) not believed — so the pass travels
+#     in cleartext on any downgrade;
+#   - your application sees Caddy's address in every log line and every rate
+#     limit instead of the visitor's;
+#   - bypass.cidrs matches Caddy's address, so an office allowlist silently
+#     stops working.
+#
+# With it set, the gate reads the visitor from Caddy's X-Forwarded-For, strips
+# any inbound X-Real-IP / CF-Connecting-IP / True-Client-IP so a client cannot
+# forge one, and re-states the resolved address for your application.
+#
+# 172.16.0.0/12 is Docker's default range and is fine here because the gate has
+# no host port — nothing outside the compose network can reach it to lie to it.
+# Narrow it to your actual subnet if you pin one in compose:
+#     docker network inspect caddy-tls_default -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+trusted_proxies = ["172.16.0.0/12"]
+
+# False, and earned rather than merely inherited: Caddy terminates TLS, or the
+# trial runs on loopback, so WebCrypto is available either way and the fast
+# solver is the one that runs. Turning it on here would hand honest visitors a
+# JavaScript SHA-256 that is 10-50x slower per hash, for nothing — the whole
+# reason to put a terminator in front is that you no longer need the fallback.
+allow_insecure_context = false
+
+pass_ttl         = "60s"   # pass lifetime, and also the solve deadline
+max_session      = "30m"   # caps the cheap renewal chain before re-admission
+difficulty       = 14      # admission cost; +1 roughly doubles solve time
+renew_difficulty = 6       # background renewal cost; cheap on purpose
+shutdown_grace   = "5s"    # raise the compose stop_grace_period too if you raise this
+
+# Add the renewal script to admitted HTML pages, so a pass stays fresh while
+# the visitor browses instead of lapsing the moment they leave the wait page.
+# Only 200 text/html document navigations are touched, only where the page's
+# own CSP permits it, and never on a bypassed path.
+inject = true
+
+# The built-in wait page is used here, because this example is about the
+# topology. ../anteroomized shows a custom one — and one thing it demonstrates
+# is worth doing before you go public: put your Open Graph tags in
+# pages/header.html, or every link a visitor shares previews as "Pardon us for
+# a moment", cached that way for days by the unfurler.
+# pages = "/etc/anteroom/pages"
+
+# Anteroom preserves the visitor's Host header, and Caddy forwarded it
+# unchanged, so this allowlist — if you set it — lists the PUBLIC authority.
+# Include the port when it is part of the public URL.
+# public_hosts = ["example.com"]
+
+# Prometheus /metrics, JSON /stats, /healthz. Unauthenticated, so 127.0.0.1
+# here means container-local: right for a scraper in the same network
+# namespace, useless from outside. For an external Prometheus use ":8090" and
+# publish it ONLY onto a trusted monitoring network.
+# admin_listen = "127.0.0.1:8090"
+
+# ---------------------------------------------------------------------------
+# Bypass: traffic that must never be challenged. Every path here is one that
+# hello-app actually serves, and each is a category rather than a special case.
+# ---------------------------------------------------------------------------
+[bypass]
+paths = [
+  "/robots.txt",     # a crawler sends Accept: */*, so it gets the machine refusal
+                     # rather than the wait page — and will not solve a puzzle
+  "/sitemap.xml",
+  "/feed.xml",       # an RSS reader is not a browser navigation either
+  "/.well-known/*",  # see the note below on ACME
+  "/webhooks/*",     # a POST is not a navigation, and a refused POST loses its body
+  "/sw.js",          # the app's OWN service worker script — see below
+]
+cidrs = []           # usable here — unlike a gate with a published port — because
+                     # trusted_proxies is set and Caddy forwards the visitor. One
+                     # caveat for the local trial only: publishing a port NATs the
+                     # connection, so Caddy's peer is the Docker bridge and every
+                     # visitor looks like one address until this is deployed.
+
+# /sw.js is the one that looks skippable and is not. A browser re-fetches a
+# worker's script to check for updates, and a failed update check does not drop
+# the registration — measured on a 401 and on a 404, in both Chromium and
+# Firefox. Gate that path and a visitor whose pass has lapsed keeps running the
+# old worker forever and you cannot ship them a fix.
+#
+# /.well-known/* is belt and braces for Caddy specifically: Caddy answers the
+# ACME HTTP-01 challenge itself, ahead of the route that proxies to the gate,
+# so certificate renewal never depends on this bypass — or on the gate running
+# at all. Everything else that lives under /.well-known/ still wants it.
+
+# Both of these are already the defaults; they are restated because they decide
+# whether a machine client can read the instructions for getting through, and a
+# refusal nobody reads is a gate nobody can pass.
+[triage]
+json_accept    = true             # Accept: application/json → the 401 refusal as JSON
+ok_body_agents = ["claude-user"]  # fetch tools measured to discard non-2xx bodies get
+                                  # the markdown with status 200, the only status they surface

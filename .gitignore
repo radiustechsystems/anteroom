@@ -13,12 +13,12 @@ anteroom-payments.db
 .env.*
 *.key
 anteroom.toml
-# ...except the reference deployment's, which is committed on purpose: it is
-# what the acceptance suite deploys, and compose bind-mounts it into the gate.
+# ...except an example deployment's, which is committed on purpose: it is what
+# the acceptance suite deploys and what compose bind-mounts into the gate.
 # Without this line the pattern above swallows it, `docker compose up` creates a
 # directory where the file should be, and the container fails to start with
 # "not a directory".
-!examples/anteroomized/anteroom.toml
+!examples/*/anteroom.toml
 log/
 run
 

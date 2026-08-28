@@ -243,6 +243,8 @@ copy-paste error between the two.)
 
 The production topology, and the fix for trap 1: Caddy or nginx terminates TLS,
 forwards to Anteroom, which forwards to the app.
+[`examples/caddy-tls/`](../examples/caddy-tls/) is the whole of what follows as a
+working deployment, including the rate-limiting recipe Caddy needs a plugin for.
 
 ```yaml
 services:
@@ -397,3 +399,6 @@ the line includes the client IP and user agent.
   including the Tier 0 tests that assert the container contract.
 - [`../examples/anteroomized/`](../examples/anteroomized/) — the working
   deployment this page describes.
+- [`../examples/caddy-tls/`](../examples/caddy-tls/) — the same deployment with
+  Caddy terminating TLS in front of it, which is the shape to copy for
+  production.

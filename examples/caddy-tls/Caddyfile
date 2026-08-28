@@ -1,0 +1,60 @@
+# Caddyfile — the public edge in front of Anteroom.
+#
+# SITE_ADDRESS decides whether this deployment has TLS, and it is the only
+# thing that changes between a trial and production:
+#
+#   http://localhost   (the default)  plain HTTP, no certificate, and no need
+#                                     for one — browsers treat loopback as a
+#                                     secure context, so WebCrypto and service
+#                                     workers both work. A LAN address does not
+#                                     get that treatment; see docs/docker.md.
+#   example.com                       Caddy obtains and renews a certificate
+#                                     over ACME by itself, redirects :80 to
+#                                     :443, and enables HTTP/2 and HTTP/3. No
+#                                     tls directive, no certbot, no cron.
+#
+# What is deliberately NOT here is the interesting part. nginx needs four
+# proxy_set_header lines, proxy_http_version 1.1, and proxy_buffering off in
+# front of the gate (docs/nginx.md); Caddy does all of that by default:
+#
+#   - it sets X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host itself,
+#     which is what Anteroom's trusted_proxies reads;
+#   - it forwards the visitor's Host header unchanged, so the gate and your app
+#     see the public authority (and so public_hosts, if you set it, must list
+#     that authority and not `anteroom:8080`);
+#   - it does not buffer responses, and it streams text/event-stream as it
+#     arrives, so SSE and WebSockets pass through;
+#   - it has no HTTP cache at all, which satisfies "do not cache HTML in front
+#     of the gate" by doing nothing. If you add the cache-handler plugin, that
+#     stops being true — the wait page is an interstitial served at the URL of
+#     real content, and a cache in front of the gate can pin it there.
+#
+# There is exactly one thing nginx gives you that Caddy does not: request rate
+# limiting. See "Rate limiting" in README.md.
+
+{$SITE_ADDRESS:http://localhost} {
+	reverse_proxy anteroom:8080 {
+		# Uncomment for more than one gate replica. /.anteroom/healthz is
+		# answered by the gate ahead of the ladder, so it is never challenged
+		# and never proxied — an unauthenticated liveness check that costs one
+		# comparison.
+		# health_uri /.anteroom/healthz
+		# health_interval 10s
+
+		# Caddy already streams as responses arrive, and special-cases
+		# text/event-stream. Uncomment only if you serve something long-lived
+		# that is NOT labelled as an event stream and it arrives in bursts.
+		# flush_interval -1
+	}
+
+	# Compression belongs here rather than in the app. Anteroom asks the
+	# upstream for `Accept-Encoding: identity` on the HTML navigations it may
+	# inject the renewal script into, so those responses reach Caddy
+	# uncompressed and Caddy is the last hop that can compress them.
+	encode zstd gzip
+
+	log {
+		output stdout
+		format console
+	}
+}

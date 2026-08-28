@@ -1,0 +1,78 @@
+# The workload, written as if the gate did not exist.
+#
+# That is the point of the exercise: nothing below mentions an anteroom
+# container, a config volume, or port 8080. The manifest carries three pieces
+# of metadata asking for the gate — the inject label and upstream-port
+# annotation on the pod template, the proxied label on the Service — and the
+# policies do the rest at admission.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-app
+  namespace: hello
+spec:
+  # Two on purpose: passes are stateless signed cookies, so replicas need no
+  # shared state beyond the HMAC key — and two replicas is the deployment that
+  # proves the key actually is shared. If visitors re-solve on every other
+  # request, the gates hold different keys; see the README's checks.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-app
+  template:
+    metadata:
+      labels:
+        app: hello-app
+        # Ask for the gate...
+        anteroom.radiustech.xyz/inject: enabled
+      annotations:
+        # ...and say where the app listens. Omitting this is an admission
+        # error, not a guessed default.
+        anteroom.radiustech.xyz/upstream-port: "3000"
+    spec:
+      containers:
+        - name: hello-app
+          # Built from examples/hello-app and loaded into the cluster by hand
+          # (see README). Any HTTP server works here; adjust the port
+          # annotation and probes to match.
+          image: hello-app:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HELLO_LISTEN
+              value: ":3000"
+          ports:
+            - name: http
+              containerPort: 3000
+          # Probes stay on the app's own port and keep working after
+          # injection: the kubelet dials the containerPort directly, inside
+          # the pod, and never crosses the gate.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-app
+  namespace: hello
+  labels:
+    # The Service's half of the opt-in: at admission its targetPort is
+    # rewritten to the named port "anteroom", so cluster traffic reaches the
+    # gate. Without this label the Service keeps routing to :3000 and the gate
+    # stands decoratively beside the app.
+    anteroom.radiustech.xyz/proxied: enabled
+spec:
+  selector:
+    app: hello-app
+  ports:
+    - name: http
+      port: 80
+      # Written as the author of an ungated app would: pointing at the app.
+      # The policy replaces it. Leaving targetPort out entirely also works —
+      # the rewrite adds it.
+      targetPort: http

@@ -1,0 +1,31 @@
+# Permissions for the generate policy.
+#
+# Kyverno's background controller creates and synchronizes what generate rules
+# declare, but it deliberately ships with almost no rights of its own — you
+# grant exactly what your policies generate, via a ClusterRole labeled for
+# aggregation. Without this, generate-anteroom-config fails quietly: the apply
+# succeeds, and the error sits in the policy's status
+# (`kubectl describe clusterpolicy generate-anteroom-config`) and in
+# UpdateRequests, not on your terminal.
+#
+# Secrets are the sensitive half of this grant, and it is worth being clear
+# about what it means: the background controller can now read and write
+# Secrets in every namespace. That is inherent to cloning a key across
+# namespaces — the controller that copies a secret must be allowed to hold it.
+# If that is too broad for your cluster, drop the clone rule from the policy
+# and distribute the key another way (per-namespace by hand, or a secrets
+# operator), and remove "secrets" from this rule.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:generate-anteroom
+  labels:
+    # This label is the mechanism: Kyverno's background-controller ClusterRole
+    # aggregates every ClusterRole carrying it.
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+    app.kubernetes.io/component: background-controller
+    app.kubernetes.io/part-of: kyverno
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch, create, update, delete]

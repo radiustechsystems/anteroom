@@ -345,6 +345,11 @@ Wait pages ship well as a ConfigMap: the kubelet syncs edits into the pod within
 a minute and the gate re-reads them per challenge, so a copy change needs no
 rollout.
 
+To run this shape as cluster policy instead of hand-wiring it per workload —
+Kyverno injecting the sidecar, rewriting the Service through it, and
+generating the mounted ConfigMap and Secret — see
+[`../examples/kyverno/`](../examples/kyverno/).
+
 ## Building the image yourself
 
 ```sh

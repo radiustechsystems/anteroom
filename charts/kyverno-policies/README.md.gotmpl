@@ -98,15 +98,44 @@ pods were never injected.
 | --- | --- | --- |
 | `inject-anteroom-sidecar` | Pods | Adds the gate container (port 8080, named `anteroom`), proxying to `127.0.0.1:<upstream-port>`, with the config ConfigMap mounted at `/etc/anteroom` and `ANTEROOM_HMAC_KEY` from the namespace's Secret. Readiness on `/.anteroom/healthz` sequences traffic: an unready gate keeps the pod out of the Service. |
 | `route-service-through-anteroom` | Services | Sets every port's `targetPort` to the named port `anteroom`. Every port — a Service that also exposes a side channel (gRPC, metrics) should not carry the label; split the HTTP port into its own labeled Service. |
-| `generate-anteroom-config` | Namespaces | Generates the ConfigMap holding `gateConfig` (synchronized: chart upgrades roll config out to every namespace; hand-edits to copies are reverted) and clones the HMAC Secret from `hmacSecret.sourceNamespace`. |
+| `generate-anteroom-config` | Namespaces | Generates the ConfigMap holding `gateConfig` (synchronized: chart upgrades roll config out to every namespace; hand-edits to copies are reverted), clones the HMAC Secret from `hmacSecret.sourceNamespace`, and — with `admin.networkPolicy.enabled` — generates the NetworkPolicy fencing the exposed admin port. |
 
 Two boundaries worth knowing about, documented with fixes in the
 [example's README](../../examples/kyverno/README.md): the Service rewrite
 moves *Service* traffic behind the gate, but any pod can still dial the app's
 port on the pod IP directly (the fence is a NetworkPolicy admitting only port
-8080); and the gate's admin listener (`/metrics`, `/stats`, `/healthz`)
-binds the pod's loopback, reachable via `kubectl port-forward` but not from
-the cluster network.
+8080); and the gate's admin listener (`/metrics`, `/stats`, `/activity`,
+`/healthz`) binds the pod's loopback, reachable via `kubectl port-forward`
+but not from the cluster network.
+
+## Scraping the fleet
+
+The loopback default is right until something in the cluster needs to read
+`/metrics` — a Prometheus, or
+[anteroom-stats](https://github.com/radiustechsystems/anteroom-stats) in its
+Kubernetes mode, which discovers gates by the same
+`anteroom.radiustech.xyz/inject=enabled` label this chart already keys on.
+`admin.expose` moves the listener onto the pod network and names the port
+`anteroom-admin` so a scraper can resolve it without knowing the number:
+
+```sh
+helm upgrade --install anteroom-policies ./charts/kyverno-policies \
+  --set admin.expose=true \
+  --set admin.networkPolicy.enabled=true
+```
+
+It is a real trade, not a formality. The listener is unauthenticated and
+reports traffic volumes and — wherever `gateConfig` grows an `[activity]`
+section — visitor IP addresses; exposing it without the NetworkPolicy hands
+both to every pod in the cluster. And the NetworkPolicy is not free either:
+it is deny-by-default for the pods it selects, so it closes the direct route
+to the application's own port and, on some CNIs, blocks kubelet probes. Read
+`admin.networkPolicy.enabled`'s description before turning it on, and verify
+probes survive on your CNI.
+
+Existing pods keep the loopback binding until they restart: the env var is
+set at admission, so the change lands with a rollout
+(`kubectl -n <ns> rollout restart deploy/<name>`).
 
 {{ template "chart.valuesSection" . }}
 

@@ -95,8 +95,14 @@ func TestNoTransactionSigningPrimitives(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			// Hidden directories are local tooling or repository metadata. This
+			// deliberately includes .github: this audit scans shipped Go source,
+			// not workflows (which need separate secret and action-pin checks).
+			if path != root && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
 			switch d.Name() {
-			case ".git", "node_modules", "vendor", "test-results":
+			case "node_modules", "vendor", "test-results":
 				return filepath.SkipDir
 			}
 			return nil

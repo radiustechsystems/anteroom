@@ -643,7 +643,7 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 	// every other upstream.
 	r.Header.Del(payment.HeaderSignature)
 	// paidWriter applies the final no-store seal after upstream headers arrive.
-	g.serveUpstream(&paidWriter{ResponseWriter: w, settle: b64Std(enc)}, r, false)
+	g.forward(&paidWriter{ResponseWriter: w, settle: b64Std(enc)}, r)
 	return decisionPassPaid
 }
 

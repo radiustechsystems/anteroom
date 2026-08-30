@@ -651,13 +651,15 @@ func TestPrefersMarkdown(t *testing.T) {
 		accept string
 		want   bool
 	}{
-		{"text/markdown, text/html, */*", true},    // equal q, markdown first
-		{"text/html, text/markdown", false},        // equal q, html first
-		{"text/markdown;q=0.9, text/html", false},  // html outranks
-		{"text/html;q=0.5, text/markdown", true},   // markdown outranks
-		{"text/markdown", true},                    // html not offered
-		{"text/html,application/xhtml+xml", false}, // ordinary browser
-		{"*/*", false}, // neither named
+		{"text/markdown, text/html, */*", true},     // equal q, markdown first
+		{"text/html, text/markdown", false},         // equal q, html first
+		{"text/markdown;q=0.9, text/html", false},   // html outranks
+		{"text/html;q=0.5, text/markdown", true},    // markdown outranks
+		{"text/markdown", true},                     // html not offered
+		{"text/markdown;q=0", false},                // explicitly unacceptable
+		{"text/markdown;q=0, text/html;q=0", false}, // neither acceptable
+		{"text/html,application/xhtml+xml", false},  // ordinary browser
+		{"*/*", false},                              // neither named
 		{"", false},
 	} {
 		if got := prefersMarkdown(tc.accept); got != tc.want {
@@ -2130,6 +2132,12 @@ func TestIsBrowserNav(t *testing.T) {
 			method:  "GET",
 			headers: map[string]string{"Accept": htmlAccept, "User-Agent": browserUA},
 			want:    true,
+		},
+		{
+			name:    "html explicitly unacceptable",
+			method:  "GET",
+			headers: map[string]string{"Accept": "text/html;q=0, */*", "User-Agent": browserUA},
+			want:    false,
 		},
 		{
 			name:    "curl",

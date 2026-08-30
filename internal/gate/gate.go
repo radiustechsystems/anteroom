@@ -310,8 +310,8 @@ func newProxy(u *url.URL, socket string, m *bypass.Matcher, lg *slog.Logger, ups
 // opens a TCP connection and closes it afterwards. Under a few thousand
 // requests per second that is tens of thousands of TIME_WAIT sockets, several
 // cores of kernel time, and eventually failed connects served as 502 — the
-// first ceiling a load test finds, and one that has nothing to do with the
-// gate's own work.
+// first ceiling the bench harness found (docs/benchmarking.md, "Finding the
+// peak"), and one that has nothing to do with the gate's own work.
 //
 // The pool grows to the peak concurrency actually seen and no further; an idle
 // connection costs the upstream one open socket and a few kilobytes. 512 is

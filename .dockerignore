@@ -24,6 +24,7 @@ anteroom.toml
 docs/
 examples/
 acceptance/
+bench/
 LICENSE
 
 # editor / OS noise

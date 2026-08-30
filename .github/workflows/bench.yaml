@@ -1,0 +1,80 @@
+# The k6 load test and benchmark, weekly and on demand.
+#
+# Deliberately not a job in ci.yaml: ci.yaml is what release.yaml calls to
+# decide a tag is publishable, and a load test on a shared runner with unknown
+# neighbours is a trend signal, not a release gate. (ci.yaml does run the
+# ~1 minute smoke slice, which has no latency thresholds.) The thresholds in
+# bench/k6/load.js fail this job; the summary lands in the step summary and the
+# full k6 JSON is kept as an artifact so a regression can be traced to a week.
+#
+# bench/README.md and docs/benchmarking.md describe the harness.
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: which script to run (peak is a curve, not a pass/fail; read the step summary)
+        type: choice
+        options: [load, benchmark, peak]
+        default: load
+      peak_rung:
+        description: for peak — which rung to climb
+        type: choice
+        options: [pass_json, pass_html, refusal, refusal_json, wait_page, answer, bypass, direct]
+        default: pass_json
+      k6_image:
+        description: k6 image (bench/compose.yaml pins the default)
+        type: string
+        default: ''
+  schedule:
+    # Monday 06:17 UTC. An odd minute, as GitHub asks, so it does not queue
+    # behind everyone else's top-of-the-hour jobs.
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SCRIPT: ${{ inputs.script || 'load' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: run bench/k6/${{ env.SCRIPT }}.js
+        env:
+          K6_IMAGE: ${{ inputs.k6_image }}
+          PEAK: ${{ inputs.peak_rung || 'pass_json' }}
+        run: |
+          # An empty K6_IMAGE must be unset, not "", or compose uses "" as the tag.
+          [ -n "${K6_IMAGE}" ] || unset K6_IMAGE
+          make "${SCRIPT}"
+
+      - name: report
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat bench/results/*-latest.txt 2>/dev/null || echo "no summary written"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-${{ env.SCRIPT }}-${{ github.run_id }}
+          path: bench/results/*.json
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: leave no containers behind
+        if: always()
+        run: make bench-down

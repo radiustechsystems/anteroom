@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func matcher(t *testing.T, paths, cidrs, trusted []string) *Matcher {
+func matcher(t testing.TB, paths, cidrs, trusted []string) *Matcher {
 	t.Helper()
 	m, err := New(paths, cidrs, trusted)
 	if err != nil {

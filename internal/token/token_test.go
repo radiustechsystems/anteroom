@@ -39,7 +39,7 @@ func signUnchecked(t *testing.T, kr *Keyring, p Pass) string {
 	return b64.EncodeToString(payload) + "." + b64.EncodeToString(tag(kr.keys[kr.signKid], payload))
 }
 
-func ring(t *testing.T, keys ...Key) *Keyring {
+func ring(t testing.TB, keys ...Key) *Keyring {
 	t.Helper()
 	kr, err := NewKeyring(keys)
 	if err != nil {

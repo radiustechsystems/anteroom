@@ -206,12 +206,19 @@ transaction signing, and no chain RPC client.
   pulled is what this repository built.
 - [`docs/docker.md`](docs/docker.md) — the container contract, Compose and
   Kubernetes examples, and container-specific networking traps.
+- [`docs/benchmarking.md`](docs/benchmarking.md) — what each rung of the
+  ladder costs and how to measure it on your own hardware with the k6 harness
+  in `bench/`; starting points, not capacity claims.
 
 ## Development
 
 ```sh
 make check        # gofmt, vet, unit tests with the race detector
 make acceptance   # the end-to-end suite (needs Docker; minutes, not seconds)
+make bench        # k6: what each rung costs, one at a time (needs Docker)
+make load         # k6: mixed traffic with pass/fail thresholds (needs Docker)
+make peak         # k6: step one rung's load up until it breaks (PEAK=pass_json)
+make bench-go     # Go micro-benchmarks for the pieces k6 cannot isolate
 ```
 
 The tests include adversarial cases for tampered passes, skewed clocks, replayed
@@ -223,6 +230,12 @@ cannot reach: the image has no shell and runs unprivileged, bypassed responses
 remain byte-identical, event streams are not buffered, and the CSP ladder works
 on the wire. Its solver follows the instructions served by the gate rather than
 calling internal implementation code.
+
+The benchmark harness (`bench/`) runs k6 against the same containers:
+`make bench` measures each rung of the ladder on its own, `make load` runs a
+mixed population with thresholds that fail on regression, and CI runs a
+one-minute functional slice of it on every pull request. Its solver follows the
+same rule as the acceptance suite's. See [`docs/benchmarking.md`](docs/benchmarking.md).
 
 Layout: `cmd/anteroom` is the entrypoint; `internal/token` signs and verifies
 passes; `internal/challenge` issues and verifies stateless puzzles; `internal/gate`

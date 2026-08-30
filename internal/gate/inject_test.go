@@ -30,7 +30,7 @@ import (
 // never expected us to read is a corrupted site.
 
 // upstreamGate builds a gate in front of an upstream handler the test controls.
-func upstreamGate(t *testing.T, cfgBody string, h http.HandlerFunc) (*Gate, *http.Cookie) {
+func upstreamGate(t testing.TB, cfgBody string, h http.HandlerFunc) (*Gate, *http.Cookie) {
 	t.Helper()
 	up := httptest.NewServer(h)
 	t.Cleanup(up.Close)

@@ -1050,7 +1050,7 @@ func TestAmbiguousSettleServesNothingAndStaysRetryable(t *testing.T) {
 func TestBrowsersStillGetTheWaitPageWhenPaymentsAreOn(t *testing.T) {
 	g, _ := payGate(t, oneRule, nil)
 	w := do(g, browserReq("/"))
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusForbidden {
 		t.Fatalf("status %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "anteroom-status") {

@@ -109,7 +109,7 @@ func TestFreePathIsUnaffectedByAFacilitatorOutage(t *testing.T) {
 
 	// A browser arriving cold gets the wait page.
 	w := do(g, browserReq("/"))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "anteroom-status") {
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "anteroom-status") {
 		t.Fatalf("browser did not get the wait page: status %d", w.Code)
 	}
 	// And can solve it, and be admitted, with the facilitator hung throughout.
@@ -325,7 +325,7 @@ func TestBreakerIsolationBetweenFacilitators(t *testing.T) {
 
 	// (c) The free path never noticed any of it.
 	bw := do(g, browserReq("/"))
-	if bw.Code != http.StatusOK || !strings.Contains(bw.Body.String(), "anteroom-status") {
+	if bw.Code != http.StatusForbidden || !strings.Contains(bw.Body.String(), "anteroom-status") {
 		t.Fatalf("free path degraded during a facilitator outage: %d", bw.Code)
 	}
 	if got := facA.calls.Load(); got != aCallsWhenOpen {

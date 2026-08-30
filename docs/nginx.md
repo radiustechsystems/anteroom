@@ -336,7 +336,7 @@ is something a framework does by default and nobody thinks to check.
 **WebSockets pass through.** The `Upgrade` handshake reaches the app and the
 `101 Switching Protocols` comes back, provided the request carries a pass. It
 will: a same-origin WebSocket sends cookies, and the page that opened it was
-admitted. Without a pass the handshake gets `401`, because a handshake is not a
+admitted. Without a pass the handshake gets `403`, because a handshake is not a
 browser navigation — so a WebSocket opened from a page on *another* origin, or by
 a non-browser client, needs its path bypassed. An established connection is not
 re-checked when the pass expires; it stays open.
@@ -361,7 +361,7 @@ still applies at nginx as before.
 
 ## Bypass rules an nginx-fronted site usually needs
 
-Everything that is not a browser navigation gets a machine-readable `401` instead
+Everything that is not a browser navigation gets a machine-readable `403` instead
 of the wait page. That is right for scrapers and wrong for several things you
 probably run. [`operating.md`](operating.md) has the full table; the ones that
 come up on nearly every nginx deployment:
@@ -378,7 +378,7 @@ paths = [
 
 That last one is easy to skip and expensive to skip. A browser re-fetches a
 worker's script to check for updates; gate that path and a visitor without a
-pass gets a `401`, and a failed update check does not drop the registration — so
+pass gets a `403`, and a failed update check does not drop the registration — so
 the old worker keeps running and you cannot ship it a fix. See prerequisite 4 in
 [`operating.md`](operating.md).
 
@@ -392,7 +392,7 @@ does not depend on the gate running at all.
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' https://example.com/
-# 401 — correct. curl is not a browser navigation, so it gets the refusal.
+# 403 — correct. curl is not a browser navigation, so it gets the refusal.
 # A 200 here means the gate is being bypassed and the site is ungated.
 
 curl -s https://example.com/robots.txt        # 200: bypassed

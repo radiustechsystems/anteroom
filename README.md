@@ -101,7 +101,7 @@ curl -s localhost:8080/                           # the machine-readable refusal
 curl -s localhost:8080/.anteroom/instructions.md  # how a client passes the gate
 ```
 
-A non-browser client gets `401` with markdown telling it how to solve the puzzle
+A non-browser client gets `403` with markdown telling it how to solve the puzzle
 (`Accept: application/json` gets the same as JSON). That document is the contract
 for automated access, and it is worth reading once: `GET /.anteroom/challenge`,
 find a nonce whose `sha256(challenge + nonce)` sorts below the returned

@@ -83,6 +83,13 @@ func noStore(w http.ResponseWriter) {
 	h.Set("Vary", "Cookie, Accept, Sec-Fetch-Mode, User-Agent")
 }
 
+const actionHeader = "X-Anteroom-Action"
+
+func challengeRequired(w http.ResponseWriter) {
+	noStore(w)
+	w.Header().Set(actionHeader, "challenge")
+}
+
 // serveSchema hands out the offer extension's JSON Schema — the target of the
 // $ref every PAYMENT-REQUIRED offer carries. Cacheable for an hour: the
 // document changes only when the binary does, and it is advisory field

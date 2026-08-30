@@ -300,18 +300,41 @@ func newProxy(u *url.URL, socket string, m *bypass.Matcher, lg *slog.Logger, ups
 			http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		},
 	}
+	p.Transport = upstreamTransport(socket)
+	return p
+}
+
+// upstreamIdleConns is how many idle keep-alive connections the proxy holds
+// open to the upstream. It exists because Go's DefaultTransport keeps two: with
+// a single upstream host, that means every request beyond the second in flight
+// opens a TCP connection and closes it afterwards. Under a few thousand
+// requests per second that is tens of thousands of TIME_WAIT sockets, several
+// cores of kernel time, and eventually failed connects served as 502 — the
+// first ceiling a load test finds, and one that has nothing to do with the
+// gate's own work.
+//
+// The pool grows to the peak concurrency actually seen and no further; an idle
+// connection costs the upstream one open socket and a few kilobytes. 512 is
+// far above the concurrency a single gate sees before it saturates on CPU, and
+// far below where an application server's connection limit becomes the
+// operator's concern.
+const upstreamIdleConns = 512
+
+// upstreamTransport is the proxy's connection pool. socket, when non-empty, is
+// a unix socket path to dial instead of the URL's TCP address; everything else
+// — the request line, headers, and streaming behaviour — is identical on both
+// paths, so nothing downstream needs to know which one it is.
+func upstreamTransport(socket string) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 0 // no total cap: there is one host, and the per-host cap is the limit
+	t.MaxIdleConnsPerHost = upstreamIdleConns
 	if socket != "" {
-		// Everything about the proxy stays the same except where the connection
-		// goes: the request line, headers, and streaming behaviour are
-		// identical to the TCP path, so nothing downstream needs to know.
-		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
 		}
-		p.Transport = t
 	}
-	return p
+	return t
 }
 
 // ServeHTTP walks the ladder. Every request runs through the recorder so the

@@ -192,6 +192,29 @@ verified_crawlers = ["googlebot"]
 	}
 }
 
+func TestHostedFetcherTriagePrecedesPayment(t *testing.T) {
+	g, _ := payGate(t, oneRule, nil)
+	g.hosted = &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+
+	web := agentReq("/report")
+	web.RemoteAddr = "192.0.2.2:1234"
+	web.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)")
+	w := do(g, web)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("verified hosted fetcher did not bypass paid route: %d %q", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get(payment.HeaderRequired); got != "" {
+		t.Fatalf("verified hosted fetcher received a payment offer: %q", got)
+	}
+
+	cli := agentReq("/report")
+	cli.Header.Set("User-Agent", "Claude-User (claude-code/2.1.250; +https://support.anthropic.com/)")
+	w = do(g, cli)
+	if got := w.Header().Get(payment.HeaderRequired); got == "" {
+		t.Fatalf("Claude Code did not receive an x402 offer: status %d body %q", w.Code, w.Body.String())
+	}
+}
+
 // facFake is one fake facilitator with per-endpoint counters, for tests that
 // need to know WHICH facilitator was called.
 type facFake struct {

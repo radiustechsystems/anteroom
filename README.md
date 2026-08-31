@@ -43,6 +43,12 @@ after a restart.
 The goal is not to tell humans from bots. It is that high-volume automated access
 is either cheap to tolerate, cheap to discourage, or paid for.
 
+One explicit exception is enabled by default: source-verified `Claude-User`,
+`ChatGPT-User`, and `Google-Agent` hosted fetchers pass through because they can
+complete neither the browser proof nor x402. This also bypasses paid routes; it
+authenticates vendor infrastructure, not a human or application user. Set
+`triage.allow_hosted_fetchers = false` to give those requests a strict `403`.
+
 ## Running it
 
 Every release attaches a static binary for Linux (x86-64, ARM64, ARMv7), macOS

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Refresh Anteroom's embedded crawler IP ranges."""
+"""Refresh Anteroom's machine-readable machine-identity IP ranges.
+
+Anthropic's stable outbound 160.79.104.0/21 has no JSON feed. Its embedded
+claude_outbound.json is intentionally reviewed by hand against
+https://platform.claude.com/docs/en/api/ip-addresses.
+"""
 
 import argparse
 import ipaddress
@@ -22,6 +27,18 @@ SOURCES = {
     "ccbot": (
         "https://index.commoncrawl.org/ccbot.json",
         ROOT / "internal/crawler/ccbot.json",
+    ),
+    "claude-user": (
+        "https://claude.com/crawling/bots.json",
+        ROOT / "internal/hosted/claude_bots.json",
+    ),
+    "chatgpt-user": (
+        "https://openai.com/chatgpt-user.json",
+        ROOT / "internal/hosted/chatgpt_user.json",
+    ),
+    "google-agent": (
+        "https://developers.google.com/static/crawling/ipranges/user-triggered-agents.json",
+        ROOT / "internal/hosted/google_user_triggered_agents.json",
     ),
 }
 MAX_BYTES = 1 << 20

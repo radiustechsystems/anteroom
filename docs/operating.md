@@ -294,6 +294,9 @@ verification uses the same resolved client address as CIDR bypasses. If that
 address cannot be resolved, the request follows the ordinary ladder rather than
 being reported to the crawler as a permanent DNS outage.
 
+Claimed-but-unverified machine identities always receive a strict `403`; the
+`ok_body_agents` compatibility downgrade cannot turn a spoof into a 200.
+
 Refresh the embedded snapshots with `scripts/update-crawler-ips.py`. The
 scheduled workflow reports a semantic range change for human review rather
 than committing generated data automatically.

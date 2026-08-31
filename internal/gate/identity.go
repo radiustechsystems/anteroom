@@ -37,7 +37,7 @@ func (g *Gate) serveClaimedIdentity(w http.ResponseWriter, r *gateRequest) (deci
 		serveCrawlerVerificationUnavailable(w)
 		return decisionCrawlerVerificationUnavailable, true
 	default:
-		g.serveRefusal(w, r.Request)
+		g.serveStrictRefusal(w, r.Request)
 		return decisionCrawlerUnverified, true
 	}
 }

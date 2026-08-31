@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -352,25 +351,26 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		start = g.now()
 	}
 	rec := &recorder{ResponseWriter: w, status: http.StatusOK}
-	decision := g.serve(rec, r)
-	g.met.requests.With(decision).Inc()
-	g.met.countBytes(decision, uint64(rec.n))
-	g.recordDecision(decision, r)
+	request := g.inspect(r)
+	d := g.serve(rec, request)
+	g.met.requests.With(d.String()).Inc()
+	g.met.countBytes(d, uint64(rec.n))
+	g.recordDecision(d, request)
 	if !verbose {
 		return
 	}
 	attrs := []any{
 		"method", r.Method,
 		"path", r.URL.Path,
-		"decision", decision,
+		"decision", d.String(),
 		"status", rec.status,
 		"bytes", rec.n,
 		"dur", g.now().Sub(start).Round(time.Microsecond).String(),
 	}
-	if ip, err := g.match.ClientIP(r); err == nil {
-		attrs = append(attrs, "ip", ip.String())
+	if request.clientIP.IsValid() {
+		attrs = append(attrs, "ip", request.clientIP.String())
 	}
-	if ua := r.Header.Get("User-Agent"); ua != "" {
+	if ua := request.facts.userAgent; ua != "" {
 		attrs = append(attrs, "ua", ua)
 	}
 	g.lg.Debug("hit", attrs...)
@@ -378,7 +378,8 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serve is the ladder proper. It returns the name of the rung that answered, for
 // logging; the name is also the vocabulary the docs use to describe the ladder.
-func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
+func (g *Gate) serve(w http.ResponseWriter, q *gateRequest) decision {
+	r := q.Request
 	// Strip headers the gate itself authors: an inbound copy is a forgery
 	// attempt, and the upstream must only ever see ours.
 	r.Header.Del("X-Anteroom-Status")
@@ -400,7 +401,7 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	if p := r.URL.Path; p != cleanPath(p) || strings.Contains(p, `\`) {
 		noStore(w)
 		http.Error(w, "bad request: non-canonical path", http.StatusBadRequest)
-		return "non-canonical-path"
+		return decisionNonCanonicalPath
 	}
 
 	// An authority allowlist is a deployment boundary, so it precedes every
@@ -409,28 +410,28 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	// Health is content-free and remains reachable to a local orchestrator whose
 	// probe authority is necessarily the container's loopback address.
 	if r.URL.Path != HealthPath && len(g.publicHosts) > 0 {
-		if _, ok := g.publicHosts[requestAudience(r)]; !ok {
+		if _, ok := g.publicHosts[q.audience]; !ok {
 			noStore(w)
 			http.Error(w, "misdirected request: authority is not served here", http.StatusMisdirectedRequest)
-			return "unknown-authority"
+			return decisionUnknownAuthority
 		}
 	}
 
 	// 1. The gate's own endpoints — never proxied, never gated.
 	if strings.HasPrefix(r.URL.Path, prefix) {
 		g.serveOwn(w, r)
-		return "own-endpoint"
+		return decisionOwnEndpoint
 	}
 
 	// 2. Bypass: exempted paths and always-allowed ranges. Never injected into —
 	// a bypass exists because something needs the bytes untouched.
 	if g.match.Path(r.URL.Path) {
 		g.forward(w, r)
-		return "bypass-path"
+		return decisionBypassPath
 	}
-	if ip, err := g.match.ClientIP(r); err == nil && g.match.IP(ip) {
+	if q.clientIP.IsValid() && g.match.IP(q.clientIP) {
 		g.forward(w, r)
-		return "bypass-ip"
+		return decisionBypassIP
 	}
 
 	// 2b. A CORS preflight goes upstream. Not a concession — a preflight is
@@ -445,9 +446,9 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	// on the ladder like anything else — a cross-origin fetch without a pass is
 	// still walled. What this gives up is that an unauthenticated client can
 	// make the upstream answer OPTIONS, which is a cheap handler and no content.
-	if isCORSPreflight(r) {
+	if q.facts.preflight {
 		g.forward(w, r)
-		return "cors-preflight"
+		return decisionCORSPreflight
 	}
 
 	// 3. A valid pass whose scope covers this path.
@@ -462,11 +463,11 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 			// hands it to people who never paid. No settlement happened on this
 			// request, so there is no receipt to re-state — and an upstream copy
 			// of one is deleted rather than forwarded.
-			g.serveUpstream(&paidWriter{ResponseWriter: w}, r, false)
-			return "pass-" + string(p.Kind)
+			g.forward(&paidWriter{ResponseWriter: w}, r)
+			return decisionPassPaid
 		}
-		g.serveUpstream(w, r, true)
-		return "pass-" + string(p.Kind)
+		g.servePoWUpstream(w, q)
+		return decisionPassPoW
 	}
 
 	// 4. No pass. A presented payment is tried first, then the client class
@@ -479,27 +480,27 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 	// requirements are re-derived from the matched rule, never from anything
 	// the gate remembers issuing.
 	if g.paymentsEnabled() {
-		if route, ok := g.matchRoute(r.URL.Path); ok {
+		if route := q.route; route != nil {
 			if values := r.Header.Values(payment.HeaderSignature); len(values) > 0 {
 				if len(values) != 1 {
 					g.servePaymentRequired(w, r, &route.rule,
 						"exactly one PAYMENT-SIGNATURE header is required", 0)
-					return "pay-malformed"
+					return decisionPayMalformed
 				}
 				return g.servePayment(w, r, route, values[0])
 			}
-			if !isBrowserNav(r) {
+			if !q.facts.navigation {
 				g.servePaymentRequired(w, r, &route.rule, "PAYMENT-SIGNATURE header is required", 0)
-				return "payment-required"
+				return decisionPaymentRequired
 			}
 		}
 	}
-	if isBrowserNav(r) {
+	if q.facts.navigation {
 		g.serveWaitPage(w, r)
-		return "wait-page"
+		return decisionWaitPage
 	}
 	g.serveRefusal(w, r)
-	return "refusal"
+	return decisionRefusal
 }
 
 // serveUpstream proxies an admitted request, injecting the renewal script into
@@ -507,23 +508,23 @@ func (g *Gate) serve(w http.ResponseWriter, r *http.Request) string {
 //
 // Identity encoding is requested only for requests that could carry an injection,
 // so everything else — assets, API calls, downloads — keeps its compression.
-func (g *Gate) serveUpstream(w http.ResponseWriter, r *http.Request, renewPoW bool) {
-	if !renewPoW || !g.cfg.Inject {
-		g.forward(w, r)
+func (g *Gate) servePoWUpstream(w http.ResponseWriter, r *gateRequest) {
+	if !g.cfg.Inject {
+		g.forward(w, r.Request)
 		return
 	}
-	if !injectable(r) {
+	if !injectableRequest(r.Request, r.facts.navigation) {
 		// Browser navigations should always be injectable; report any disagreement
 		// because it admits the page without equipping it for renewal.
-		if r.Method == http.MethodGet && isBrowserNav(r) {
-			g.noteInjectionSkipped(r, "request-shape-not-injectable")
+		if r.Method == http.MethodGet && r.facts.navigation {
+			g.noteInjectionSkipped(r.Request, "request-shape-not-injectable")
 		}
-		g.forward(w, r)
+		g.forward(w, r.Request)
 		return
 	}
 	r.Header.Set("Accept-Encoding", "identity")
-	iw := newInjector(w, func(reason string) { g.noteInjectionSkipped(r, reason) })
-	g.forward(iw, r)
+	iw := newInjector(w, func(reason string) { g.noteInjectionSkipped(r.Request, reason) })
+	g.forward(iw, r.Request)
 	iw.finish()
 }
 
@@ -773,124 +774,6 @@ func compilePaidRoutes(payments *config.Payments) ([]paidRoute, error) {
 		})
 	}
 	return routes, nil
-}
-
-// fragmentHeaders are set by clients fetching a piece of a page rather than a
-// page. They are not navigations however their fetch metadata reads, and they
-// are shared with the injection path, which must not touch them either.
-var fragmentHeaders = []string{"HX-Request", "X-Requested-With", "Turbo-Frame", "Turbo-Request-ID"}
-
-// isBrowserNav decides who gets the wait page and who gets the machine-readable
-// refusal. Both errors cost: HTML hands a program a spinner it cannot dismiss,
-// and a refusal walls a person forever, since it carries no solver. That
-// asymmetry is why the metadata is corroborated rather than simply obeyed —
-// trust Sec-Fetch-Mode where it is decisive, and otherwise require both an
-// HTML-preferring Accept and the Mozilla token.
-//
-// Measured clients that must NOT be classified as browsers: Claude Code's fetch
-// sends `Accept: text/markdown, text/html, */*` with no Sec-Fetch-Mode, and
-// Cloudflare's agent fetch sends `text/markdown, ..., text/html;q=0.5`. Both
-// would pass a bare "Accept contains text/html" test.
-func isBrowserNav(r *http.Request) bool {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return false
-	}
-	accept := r.Header.Get("Accept")
-	if prefersMarkdown(accept) {
-		return false
-	}
-	for _, h := range fragmentHeaders {
-		if r.Header.Get(h) != "" {
-			return false
-		}
-	}
-
-	// A subresource is never a navigation, whatever mode it claims. "empty" is
-	// deliberately NOT in this set: a service-worker-re-issued navigation
-	// arrives with an empty destination, and so does an ordinary XHR — the
-	// destination cannot separate them, so the Accept/User-Agent evidence has
-	// to.
-	switch r.Header.Get("Sec-Fetch-Dest") {
-	case "", "document", "empty":
-	default:
-		return false
-	}
-
-	switch r.Header.Get("Sec-Fetch-Mode") {
-	case "navigate":
-		return true
-
-	case "":
-		// No fetch metadata at all: older browsers, and every non-browser.
-		return looksLikeBrowserHTML(r, accept)
-
-	case "same-origin":
-		// The lockout case, and the reason this function corroborates rather
-		// than obeys. A site's own root-scoped service worker that re-issues a
-		// top-level navigation with fetch(e.request) has its mode rewritten by
-		// the browser — Firefox to "same-origin", Chromium keeping "navigate".
-		// Believing the header refuses a real navigation from a real person,
-		// and since the refusal carries no solver they can never earn a pass:
-		// a silent, permanent, engine-specific lockout of every visitor to any
-		// site running a worker like that. An ordinary same-origin fetch()
-		// sends Accept: */*, so requiring an HTML-preferring Accept and a
-		// browser User-Agent keeps programs on the refusal path.
-		return looksLikeBrowserHTML(r, accept)
-
-	default:
-		// cors, no-cors, websocket: programmatic by construction.
-		return false
-	}
-}
-
-// looksLikeBrowserHTML is the corroborating evidence: a client that asks for
-// HTML and calls itself a browser. It is the same bar applied when fetch
-// metadata is absent entirely, so nothing here is a weaker standard than the
-// gate already accepted from older browsers.
-func looksLikeBrowserHTML(r *http.Request, accept string) bool {
-	return strings.Contains(accept, "text/html") &&
-		strings.Contains(r.Header.Get("User-Agent"), "Mozilla")
-}
-
-// prefersMarkdown reports whether an Accept header ranks text/markdown at least
-// as highly as text/html. Ties count as a markdown preference: a client that
-// lists markdown first with equal quality is asking for markdown.
-func prefersMarkdown(accept string) bool {
-	md, html := -1.0, -1.0
-	mdIdx, htmlIdx := -1, -1
-	for i, part := range strings.Split(accept, ",") {
-		media, params, _ := strings.Cut(strings.TrimSpace(part), ";")
-		media = strings.TrimSpace(strings.ToLower(media))
-		q := 1.0
-		for _, p := range strings.Split(params, ";") {
-			k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
-			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
-				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-					q = f
-				}
-			}
-		}
-		switch media {
-		case "text/markdown":
-			if q > md {
-				md, mdIdx = q, i
-			}
-		case "text/html":
-			if q > html {
-				html, htmlIdx = q, i
-			}
-		}
-	}
-	if md < 0 {
-		return false // markdown not offered at all
-	}
-	if html < 0 {
-		return true // markdown offered, HTML not
-	}
-	if md != html {
-		return md > html
-	}
-	return mdIdx < htmlIdx // equal quality: first listed wins
 }
 
 // setPassCookie mints p and sets it as the pass cookie, expiring at exp.

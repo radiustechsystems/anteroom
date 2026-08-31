@@ -80,19 +80,24 @@ const headBudget = 64 << 10
 // so an XHR forging Sec-Fetch-Mode: navigate earns an injection only if it is
 // genuinely fetching a document.
 func injectable(r *http.Request) bool {
+	return injectableRequest(r, isBrowserNav(r))
+}
+
+// injectableRequest is injectable with the gate's already-computed navigation
+// decision. Production passes requestFacts here so classification happens once;
+// the wrapper above keeps the predicate directly testable.
+func injectableRequest(r *http.Request, navigation bool) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
-	if isBrowserNav(r) {
+	if navigation {
 		return true
 	}
 	// Fragment requests from HTMX/Turbo are not documents even though they are
 	// text/html and may claim Accept: text/html. Injecting into a fragment puts a
 	// script tag in the middle of someone's page, or worse, replaces a target.
-	for _, h := range fragmentHeaders {
-		if r.Header.Get(h) != "" {
-			return false
-		}
+	if isFragmentRequest(r) {
+		return false
 	}
 	// Sec-Fetch-Dest is authoritative where it exists: "document" means a
 	// top-level navigation. An iframe, a script, an image is not ours to touch.

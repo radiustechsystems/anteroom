@@ -15,6 +15,23 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/payment"
 )
 
+func TestDecisionVocabularyIsClosed(t *testing.T) {
+	seen := make(map[string]decision, decisionCount)
+	for d := decision(0); d < decisionCount; d++ {
+		name := d.String()
+		if name == "" || name == "unknown" {
+			t.Fatalf("decision %d has no metric label", d)
+		}
+		if prior, ok := seen[name]; ok {
+			t.Fatalf("decisions %d and %d share label %q", prior, d, name)
+		}
+		seen[name] = d
+	}
+	if len(decisionLabels()) != int(decisionCount) {
+		t.Fatalf("decisionLabels returned %d labels for %d decisions", len(decisionLabels()), decisionCount)
+	}
+}
+
 // scrape renders the gate's metrics the way the admin server would.
 func scrape(g *Gate) string {
 	var sb strings.Builder

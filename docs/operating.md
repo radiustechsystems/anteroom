@@ -296,9 +296,10 @@ non-interference test for every case where injection is declined.
 untouched:
 
 - the request looks like a document navigation (`Sec-Fetch-Dest: document`, or a
-  GET whose `Accept` contains `text/html`) **and** carries no `HX-Request`,
-  `X-Requested-With`, `Turbo-Frame`, or `Turbo-Request-ID` header — this alone
-  excludes HTMX/Turbo fragments and JSON mislabelled as `text/html`;
+  GET whose `Accept` contains `text/html`) and carries no `HX-Request`,
+  `Turbo-Frame`, or `Turbo-Request-ID`; `X-Requested-With` excludes it only when
+  its value is `XMLHttpRequest` because Android WebViews put application package
+  names there;
 - the status is exactly `200` (never 206, 304, 3xx, 4xx, 5xx — a 304 has no body
   and a 206 is a byte range);
 - `Content-Type` is `text/html` with an ASCII-compatible charset; never

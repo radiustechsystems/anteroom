@@ -622,18 +622,44 @@ func TestRealAgentFetchToolsGetInstructions(t *testing.T) {
 	}
 }
 
+func TestAndroidWebViewPackageNameIsNotXHR(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const ua = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.0.0 Safari/537.36 TwitterAndroid/12.19.1-release.0 (312191000-r-00) Pixel+8/17 (Google;Pixel+8;google;shiba;0;;1;2015)"
+	const accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+
+	webview := httptest.NewRequest(http.MethodGet, "/article", nil)
+	webview.Header.Set("User-Agent", ua)
+	webview.Header.Set("Accept", accept)
+	webview.Header.Set("X-Requested-With", "com.twitter.android")
+	webview.RemoteAddr = "192.0.2.10:1234"
+	w := do(g, webview)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Android WebView got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+
+	xhr := webview.Clone(webview.Context())
+	xhr.Header = webview.Header.Clone()
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	w = do(g, xhr)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "markdown") {
+		t.Fatalf("XHR got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
 func TestPrefersMarkdown(t *testing.T) {
 	for _, tc := range []struct {
 		accept string
 		want   bool
 	}{
-		{"text/markdown, text/html, */*", true},    // equal q, markdown first
-		{"text/html, text/markdown", false},        // equal q, html first
-		{"text/markdown;q=0.9, text/html", false},  // html outranks
-		{"text/html;q=0.5, text/markdown", true},   // markdown outranks
-		{"text/markdown", true},                    // html not offered
-		{"text/html,application/xhtml+xml", false}, // ordinary browser
-		{"*/*", false}, // neither named
+		{"text/markdown, text/html, */*", true},     // equal q, markdown first
+		{"text/html, text/markdown", false},         // equal q, html first
+		{"text/markdown;q=0.9, text/html", false},   // html outranks
+		{"text/html;q=0.5, text/markdown", true},    // markdown outranks
+		{"text/markdown", true},                     // html not offered
+		{"text/markdown;q=0", false},                // explicitly unacceptable
+		{"text/markdown;q=0, text/html;q=0", false}, // neither acceptable
+		{"text/html,application/xhtml+xml", false},  // ordinary browser
+		{"*/*", false},                              // neither named
 		{"", false},
 	} {
 		if got := prefersMarkdown(tc.accept); got != tc.want {
@@ -2106,6 +2132,12 @@ func TestIsBrowserNav(t *testing.T) {
 			method:  "GET",
 			headers: map[string]string{"Accept": htmlAccept, "User-Agent": browserUA},
 			want:    true,
+		},
+		{
+			name:    "html explicitly unacceptable",
+			method:  "GET",
+			headers: map[string]string{"Accept": "text/html;q=0, */*", "User-Agent": browserUA},
+			want:    false,
 		},
 		{
 			name:    "curl",

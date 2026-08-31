@@ -11,9 +11,10 @@ import (
 // once keeps admission, response presentation, and HTML injection from growing
 // subtly different definitions of the same client.
 type requestFacts struct {
-	userAgent  string
-	navigation bool
-	preflight  bool
+	userAgent    string
+	navigation   bool
+	preflight    bool
+	crawlerClaim string
 }
 
 // gateRequest adds facts that need Gate state to resolve. Embedding the ordinary
@@ -34,7 +35,7 @@ func (g *Gate) inspect(r *http.Request) *gateRequest {
 	}
 	q := &gateRequest{
 		Request:  r,
-		facts:    inspectRequest(r),
+		facts:    inspectRequest(r, g.crawlers.Claim(r.Header.Get("User-Agent"))),
 		clientIP: ip,
 		audience: requestAudience(r),
 	}
@@ -46,11 +47,12 @@ func (g *Gate) inspect(r *http.Request) *gateRequest {
 	return q
 }
 
-func inspectRequest(r *http.Request) requestFacts {
+func inspectRequest(r *http.Request, crawlerClaim string) requestFacts {
 	accept := parseAccept(r.Header.Get("Accept"))
 	facts := requestFacts{
-		userAgent: r.Header.Get("User-Agent"),
-		preflight: isCORSPreflight(r),
+		userAgent:    r.Header.Get("User-Agent"),
+		preflight:    isCORSPreflight(r),
+		crawlerClaim: crawlerClaim,
 	}
 	facts.navigation = classifyNavigation(r, facts, accept, isFragmentRequest(r))
 	return facts
@@ -70,7 +72,7 @@ func classifyNavigation(r *http.Request, facts requestFacts, accept acceptPrefer
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	if fragment || accept.prefersMarkdown() {
+	if facts.crawlerClaim != "" || fragment || accept.prefersMarkdown() {
 		return false
 	}
 	// A subresource is never a navigation. "empty" remains eligible because a
@@ -164,7 +166,9 @@ func (a acceptPreferences) prefersMarkdown() bool {
 	return a.markdown.order < a.html.order
 }
 
-func isBrowserNav(r *http.Request) bool { return inspectRequest(r).navigation }
+// isBrowserNav is the configuration-free test/injection view. Production uses
+// Gate.inspect, which also supplies any claim from configured crawler providers.
+func isBrowserNav(r *http.Request) bool { return inspectRequest(r, "").navigation }
 
 func prefersMarkdown(value string) bool { return parseAccept(value).prefersMarkdown() }
 

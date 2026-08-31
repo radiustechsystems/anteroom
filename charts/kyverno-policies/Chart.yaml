@@ -8,7 +8,7 @@ description: >-
   are provisioned into it. The application manifests never mention Anteroom.
 type: application
 # The chart's own version. Bump on any change to templates or values.
-version: 0.1.0
+version: 0.2.0
 # The gate version the default values deploy. "latest" mirrors the default
 # image tag, which is right for trying the chart and wrong in front of a real
 # site — pin image.tag (and bump this) for production. docs/docker.md

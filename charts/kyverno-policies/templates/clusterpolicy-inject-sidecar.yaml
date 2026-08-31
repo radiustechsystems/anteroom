@@ -96,7 +96,23 @@ spec:
                   # the name — so the Service needs no knowledge of the number.
                   - name: anteroom
                     containerPort: 8080
+                  {{- if .Values.admin.expose }}
+                  # The operator listener, on the pod network. Named for the
+                  # same reason the traffic port is: a scraper resolves
+                  # `anteroom-admin` and never needs to know the number, and a
+                  # gate that does NOT carry this port is visibly one whose
+                  # operator did not opt into being scraped.
+                  - name: anteroom-admin
+                    containerPort: {{ .Values.admin.port }}
+                  {{- end }}
                 env:
+                  {{- if .Values.admin.expose }}
+                  # Overrides admin_listen in the mounted TOML — environment
+                  # beats file — so `gateConfig` keeps its loopback default
+                  # and stays safe for an operator to override wholesale.
+                  - name: ANTEROOM_ADMIN_LISTEN
+                    value: ":{{ .Values.admin.port }}"
+                  {{- end }}
                   # 127.0.0.1, not a service name: containers in a pod share a
                   # network namespace. This is the line that differs from the
                   # Compose sidecar and the single most common copy-paste error

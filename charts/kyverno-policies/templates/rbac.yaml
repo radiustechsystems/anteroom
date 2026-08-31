@@ -29,4 +29,12 @@ rules:
   - apiGroups: [""]
     resources: [configmaps, secrets]
     verbs: [get, list, watch, create, update, delete]
+  {{- if .Values.admin.networkPolicy.enabled }}
+  # Only granted when the chart actually generates NetworkPolicies: an
+  # unused permission on the controller that holds every namespace's secrets
+  # is not free.
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, delete]
+  {{- end }}
 {{- end }}

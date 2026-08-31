@@ -1,6 +1,7 @@
 name: release
-# Builds the container image and publishes it to GHCR, and cuts the GitHub
-# Release that goes with it.
+# Builds the container image and publishes it to GHCR, cross-compiles the
+# binary for every platform the release supports, and cuts the GitHub Release
+# that carries both.
 #
 # A tag push is the only trigger. Pushing `refs/tags/v1.2.3` is not an
 # incidental commit — it is someone stating that a specific tree is the thing
@@ -244,16 +245,98 @@ jobs:
           docker rm -f smoke >/dev/null || true
           exit 1
 
+  # The binaries, for everyone not running a container. Anteroom is a single
+  # static executable with a config file — the image is a convenience, not the
+  # only shape it comes in — and a release that shipped only the image would
+  # leave a systemd unit on a VPS, a Pi at the edge of a home network, and a
+  # laptop in front of a development server all building from source to get the
+  # thing the release page says it published.
+  #
+  # `make dist` does the building, and the platform list lives in the Makefile
+  # rather than in a matrix here on purpose: a contributor adding a platform
+  # edits one list, and `make dist` on a laptop produces the same tree this job
+  # uploads. A build matrix would put the same list in a second place and let CI
+  # be the only way to run it.
+  #
+  # One runner cross-compiles all of them — CGO_ENABLED=0 means none of these
+  # binaries needs the host it was built on — so this costs a job, not seven.
+  #
+  # `needs: [verify]` rather than `needs: [image]`: the two builds are
+  # independent and neither gates the other, so they run side by side and the
+  # release waits for both.
+  binaries:
+    name: binaries
+    needs: [verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write   # keyless signing of SHA256SUMS, see below
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Stable, not the go.mod floor. go.mod keeps the floor at 1.22 so
+          # distributions with an older toolchain can still build Anteroom; a
+          # binary *we* publish should carry current standard-library security
+          # fixes, which is a different question and gets the newer answer.
+          go-version: stable
+
+      - name: cross-compile every published platform
+        env:
+          # The same two values the image is stamped with, for the same reason:
+          # `anteroom_build_info` on /metrics is how an operator answers "which
+          # code is actually running", and it can only answer if the build was
+          # told. VERSION is the tag verbatim.
+          VERSION: ${{ github.ref_name }}
+          VCS_REF: ${{ github.sha }}
+        run: make dist
+
+      # Signed the same way and for the same reason as the manifest: keyless, so
+      # there is no key to store or leak, and the signature is bound to this
+      # workflow's identity in this repository.
+      #
+      # The signature covers SHA256SUMS rather than each archive. That file
+      # names every artifact and its hash, so one signature over it is a
+      # statement about all of them — and it is the file a downloader is already
+      # running `sha256sum --check` against, which makes verifying the signature
+      # one extra command rather than one per download.
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: sign the checksums
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes dist/SHA256SUMS \
+            --output-signature dist/SHA256SUMS.sig \
+            --output-certificate dist/SHA256SUMS.pem
+
+      - name: hand the archives to the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          # An empty upload here would sail past and produce a Release with no
+          # assets, which is the failure this whole job exists to prevent.
+          if-no-files-found: error
+          retention-days: 7
+
   # The Release gives every version a page, a changelog, and a URL that
-  # resolves — anteroom.dev points people at /releases. It carries no binary
-  # assets yet; the image is the artifact.
+  # resolves — anteroom.dev points people at /releases — and carries the
+  # binaries as assets alongside the digest of the image.
   release:
-    needs: [image]
+    needs: [image, binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the Release
     steps:
       - uses: actions/checkout@v4
+
+      - name: collect the binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
 
       - name: create the release
         env:
@@ -264,11 +347,23 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Every archive, the checksum list, and the two files that verify it.
+          assets=(dist/*)
+          if [ ! -e "${assets[0]}" ]; then
+            echo "::error::no binaries in dist/ — the binaries job produced nothing to attach"
+            exit 1
+          fi
+
           # Re-running the workflow on a tag that already has a Release is a
           # normal thing to do — a signing hiccup, a transient push failure — and
-          # it should not fail here after the image published fine.
+          # it should not fail here after the image published fine. The notes
+          # are left alone (they may have been edited by hand), but the assets
+          # are re-uploaded: the case worth repairing is a Release created
+          # before the binaries were attached, and --clobber makes the upload
+          # idempotent when they already are.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists; leaving it alone"
+            echo "release $TAG already exists; leaving the notes alone, re-uploading assets"
+            gh release upload "$TAG" "${assets[@]}" --clobber
             exit 0
           fi
 
@@ -285,6 +380,31 @@ jobs:
             -f tag_name="$TAG" --jq .body > /tmp/generated.md
 
           {
+            echo "## Binaries"
+            echo
+            echo "One static executable and no runtime dependencies. Each archive holds"
+            echo "\`anteroom\`, \`anteroom.example.toml\` to copy and edit, the README, and the"
+            echo "licences."
+            echo
+            echo '```sh'
+            echo "tar xzf anteroom_${TAG}_linux_amd64.tar.gz"
+            echo "cd anteroom_${TAG}_linux_amd64"
+            echo "cp anteroom.example.toml anteroom.toml   # then set upstream"
+            echo "./anteroom -config anteroom.toml"
+            echo '```'
+            echo
+            echo "Check what you downloaded against \`SHA256SUMS\`, and check \`SHA256SUMS\`"
+            echo "itself against the signature — it is signed by this workflow, keylessly,"
+            echo "so one verification covers every file it lists:"
+            echo
+            echo '```sh'
+            echo "sha256sum --check --ignore-missing SHA256SUMS"
+            echo "cosign verify-blob SHA256SUMS \\"
+            echo "  --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${GITHUB_REPOSITORY}/' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
+            echo
             echo "## Container image"
             echo
             echo '```sh'
@@ -308,4 +428,5 @@ jobs:
             --title "$TAG" \
             --notes-file /tmp/notes.md \
             --verify-tag \
-            "${prerelease[@]}"
+            "${prerelease[@]}" \
+            "${assets[@]}"

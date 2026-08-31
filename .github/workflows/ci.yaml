@@ -74,6 +74,29 @@ jobs:
       - name: test minimum supported Go
         run: go test ./...
 
+  dist:
+    # The release cross-compiles a binary for every platform in the Makefile's
+    # DIST_PLATFORMS and attaches the archives to the Release. That build only
+    # ever runs on a tag push, which is the worst possible moment to discover
+    # that a new import does not compile for windows or that an archive came out
+    # empty: the tag is already in the world. So build them here too.
+    #
+    # It is a compile, not a test — nothing here can run a darwin/arm64 binary —
+    # but "does it build for every platform we promise" is exactly the claim the
+    # release makes and the one that breaks silently.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: cross-compile the release archives
+        # The target asserts it produced one archive per platform, so this step
+        # fails on a platform that silently built nothing as well as on one that
+        # failed to compile.
+        run: make dist
+
   acceptance:
     # Tiers 0 and 1 exercise the image and the deployed gate.
     runs-on: ubuntu-latest

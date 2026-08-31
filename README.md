@@ -45,8 +45,23 @@ is either cheap to tolerate, cheap to discourage, or paid for.
 
 ## Running it
 
-Requires Go 1.22+ (see `go.mod`). Release artifacts use the current stable Go
-toolchain.
+Every release attaches a static binary for Linux (x86-64, ARM64, ARMv7), macOS
+(Intel and Apple silicon), Windows (x86-64), and FreeBSD (x86-64). Nothing to
+install alongside it; the archive also holds the example config.
+
+```sh
+# from https://github.com/radiustechsystems/anteroom/releases/latest
+tar xzf anteroom_v0.4.0_linux_amd64.tar.gz
+cd anteroom_v0.4.0_linux_amd64
+cp anteroom.example.toml anteroom.toml
+```
+
+The archives come with a `SHA256SUMS` signed by the release workflow;
+[`docs/releasing.md`](docs/releasing.md) has the two commands that check it, and
+they are worth running on something that sits in front of your site.
+
+Or build it. Requires Go 1.22+ (see `go.mod`); release artifacts use the current
+stable Go toolchain.
 
 ```sh
 go build ./cmd/anteroom                  # produces ./anteroom

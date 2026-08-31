@@ -1,4 +1,4 @@
-name: crawler ranges
+name: published IP ranges
 
 on:
   schedule:
@@ -13,4 +13,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/update-crawler-ips.py --check
+      - run: python3 scripts/update-published-ips.py --check

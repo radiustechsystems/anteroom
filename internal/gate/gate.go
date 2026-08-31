@@ -28,6 +28,7 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/challenge"
 	"github.com/radiustechsystems/anteroom/internal/config"
 	"github.com/radiustechsystems/anteroom/internal/crawler"
+	"github.com/radiustechsystems/anteroom/internal/hosted"
 	"github.com/radiustechsystems/anteroom/internal/metrics"
 	"github.com/radiustechsystems/anteroom/internal/payment"
 	"github.com/radiustechsystems/anteroom/internal/token"
@@ -57,6 +58,7 @@ type Gate struct {
 	now         func() time.Time
 	met         *gateMetrics
 	crawlers    crawlerVerifier
+	hosted      hostedVerifier
 
 	// The challenge-activity log for external ban tooling. Nil when the
 	// [activity] section is unconfigured — every Record call no-ops on nil,
@@ -146,6 +148,10 @@ func New(cfg *config.Config, lg *slog.Logger) (*Gate, error) {
 		return nil, err
 	}
 	crawlers.RegisterMetrics(met.registry)
+	hostedFetchers, err := hosted.New()
+	if err != nil {
+		return nil, err
+	}
 	g := &Gate{
 		cfg:         cfg,
 		lg:          lg,
@@ -161,6 +167,7 @@ func New(cfg *config.Config, lg *slog.Logger) (*Gate, error) {
 		now:         time.Now,
 		met:         met,
 		crawlers:    crawlers,
+		hosted:      hostedFetchers,
 	}
 	g.solverJS, g.solverURL = buildSolver(cfg.AllowInsecureContext)
 	if cfg.Payments != nil {

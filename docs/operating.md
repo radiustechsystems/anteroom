@@ -301,6 +301,30 @@ Refresh the embedded snapshots with `scripts/update-crawler-ips.py`. The
 scheduled workflow reports a semantic range change for human review rather
 than committing generated data automatically.
 
+### Hosted user-triggered fetchers
+
+`Claude-User/`, `ChatGPT-User/`, and `Google-Agent;` identify fetches made on a
+user's behalf by vendor-hosted tools. They are not command-line agents and
+cannot complete proof of work or x402. Anteroom checks the advertised
+case-sensitive User-Agent token, then requires the source address to appear in
+that vendor's embedded published ranges. A verified request passes through by
+default, including on x402-paid routes; an unverified claim receives a
+machine-readable `403`, never a payment offer. This authenticates vendor
+infrastructure, not application authorization.
+
+If the client address cannot be resolved, Anteroom warns once and sends the
+request through the ordinary ladder rather than labeling it a spoof or telling
+the vendor the site is temporarily unavailable forever.
+
+Claude uses the union of `claude.com/crawling/bots.json` and Anthropic's stable
+outbound `160.79.104.0/21`. This authenticates Anthropic infrastructure, not a
+human or a particular Claude product. Claude Code's different
+`Claude-User (claude-code/...)` form remains on the ordinary agent path and can
+receive x402. `triage.allow_hosted_fetchers` defaults to `true` because these
+hosted clients cannot complete either PoW or x402. Set it to `false` to remove
+the free exception: verified hosted fetchers then receive a strict `403` rather
+than falling through to a payment offer they cannot use.
+
 Percent-encoding is *not* restricted: `/repos/owner%2Frepo`, `/file%20name.txt`,
 and friends pass through untouched. Only paths whose decoded form is
 non-canonical — dot-segments (`..`, `.`), doubled slashes, or a backslash — are
@@ -439,7 +463,9 @@ keeps settlement retry separate from replaying an upstream mutation.
 
 `anteroom -v` logs one line per request naming the rung of the ladder that
 answered it — `own-endpoint`, `bypass-path`, `bypass-ip`, `bypass-crawler`,
-`crawler-verification-unavailable`, `crawler-unverified`, `pass-pow`, `pass-paid`,
+`crawler-verification-unavailable`, `crawler-unverified`, `bypass-hosted`,
+`hosted-refusal`, `hosted-unverified`,
+`pass-pow`, `pass-paid`,
 `wait-page`, `refusal`, `non-canonical-path` — with the status, response size, and
 duration:
 

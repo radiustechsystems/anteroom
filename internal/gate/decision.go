@@ -17,6 +17,9 @@ const (
 	decisionBypassCrawler
 	decisionCrawlerVerificationUnavailable
 	decisionCrawlerUnverified
+	decisionBypassHosted
+	decisionHostedRefusal
+	decisionHostedUnverified
 	decisionPaymentRequired
 	decisionPayMethodRefused
 	decisionPayUpgradeRefused
@@ -60,6 +63,9 @@ var decisionInfos = [decisionCount]decisionInfo{
 	decisionBypassCrawler:                  {name: "bypass-crawler", flags: decisionUpstream},
 	decisionCrawlerVerificationUnavailable: {name: "crawler-verification-unavailable"},
 	decisionCrawlerUnverified:              {name: "crawler-unverified", flags: decisionWalled},
+	decisionBypassHosted:                   {name: "bypass-hosted", flags: decisionUpstream},
+	decisionHostedRefusal:                  {name: "hosted-refusal", flags: decisionWalled},
+	decisionHostedUnverified:               {name: "hosted-unverified", flags: decisionWalled},
 	decisionPaymentRequired:                {name: "payment-required", flags: decisionWalled},
 	decisionPayMethodRefused:               {name: "pay-method-refused"},
 	decisionPayUpgradeRefused:              {name: "pay-upgrade-refused"},

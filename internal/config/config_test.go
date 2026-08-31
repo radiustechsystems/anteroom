@@ -48,8 +48,8 @@ func TestLoadMinimal(t *testing.T) {
 	if cfg.Difficulty != 14 || cfg.RenewDifficulty != 6 {
 		t.Errorf("difficulty defaults wrong: %+v", cfg)
 	}
-	if !cfg.Inject || !cfg.Triage.JSONAccept {
-		t.Error("inject/json_accept should default true")
+	if !cfg.Inject || !cfg.Triage.JSONAccept || !cfg.Triage.AllowHostedFetchers {
+		t.Error("inject, json_accept, and allow_hosted_fetchers should default true")
 	}
 	// No admin listener unless asked for: it is unauthenticated, so silently
 	// opening a port the operator never configured would be a surprise surface.
@@ -100,6 +100,16 @@ verified_crawlers = ["googlebot"]
 				t.Errorf("verified_crawlers = %s was accepted", list)
 			}
 		})
+	}
+}
+
+func TestHostedFetcherBypassCanBeDisabled(t *testing.T) {
+	cfg, err := Load(write(t, minimal+"\n[triage]\nallow_hosted_fetchers = false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Triage.AllowHostedFetchers {
+		t.Fatal("allow_hosted_fetchers remained enabled")
 	}
 }
 

@@ -36,7 +36,7 @@ const (
 )
 
 // HealthPath is where the gate answers a liveness probe. It is the one endpoint
-// address another package needs to know: the binary's own -healthcheck mode
+// address another package needs to know: the binary's own healthcheck verb
 // probes it, and the container image has no shell to run curl in, so a literal
 // copied into cmd would be a second spelling of the gate's URL that nothing
 // would catch drifting.

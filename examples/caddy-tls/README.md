@@ -263,11 +263,11 @@ public address means the chain is resolving visitors, and Caddy's container
 address means Anteroom is not believing Caddy — `trusted_proxies` is wrong or
 unset.
 
-Run the gate with `-v` while you are setting this up. Add it to the `anteroom`
-service in `compose.yaml`:
+Run the gate with `serve --verbose` while you are setting this up. Add it to the
+`anteroom` service in `compose.yaml`:
 
 ```yaml
-command: ["-config", "/etc/anteroom/anteroom.toml", "-v"]
+command: ["serve", "--config", "/etc/anteroom/anteroom.toml", "--verbose"]
 ```
 
 It logs one line per request naming the rung of the ladder that answered —

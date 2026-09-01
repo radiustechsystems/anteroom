@@ -18,8 +18,8 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/config"
 )
 
-// New builds the process logger. verbose (the -v flag) forces debug regardless
-// of cfg.Level, so per-request hit lines stay an explicit opt-in.
+// New builds the process logger. verbose (`serve --verbose`) forces debug
+// regardless of cfg.Level, so per-request hit lines stay an explicit opt-in.
 func New(w io.Writer, cfg config.Log, verbose bool) *slog.Logger {
 	if w == nil {
 		w = os.Stderr

@@ -6,7 +6,7 @@
 #   1. The runtime stage has no shell, no package manager, and no libc to speak
 #      of. A gate sits in the request path of someone else's site; the smallest
 #      thing that can serve is the right thing to ship. This is also why the
-#      health check is a flag on the binary rather than a curl invocation —
+#      health check is `anteroom healthcheck` rather than a curl invocation —
 #      there is nothing here for a shell-form HEALTHCHECK to run.
 #   2. It runs as a non-root UID and needs no capabilities. `listen` defaults to
 #      :8080 for exactly this reason: publish it as `-p 80:8080` and let the
@@ -81,7 +81,7 @@ COPY --from=build --chown=65532:65532 /out/state /var/lib/anteroom
 
 # A default config so the image is usable with environment variables alone:
 # config.Load treats a *named* missing file as an error (correctly — a typo'd
-# -config path must not silently fall back to defaults), so an image with no
+# --config path must not silently fall back to defaults), so an image with no
 # config at all could never start from `-e ANTEROOM_UPSTREAM=…`. This file
 # supplies every default and leaves `upstream` to the environment. Mounting your
 # own over /etc/anteroom/anteroom.toml replaces it wholesale.
@@ -91,11 +91,11 @@ EXPOSE 8080
 
 # The binary probes itself: exec form, no shell, no curl in the image.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=2s --retries=3 \
-    CMD ["/anteroom", "-config", "/etc/anteroom/anteroom.toml", "-healthcheck"]
+    CMD ["/anteroom", "healthcheck", "--config", "/etc/anteroom/anteroom.toml"]
 
 # 65532:65532 (nonroot) comes from the base image; restated so it survives a
 # base change and so `docker inspect` shows it without a lookup.
 USER 65532:65532
 
 ENTRYPOINT ["/anteroom"]
-CMD ["-config", "/etc/anteroom/anteroom.toml"]
+CMD ["serve", "--config", "/etc/anteroom/anteroom.toml"]

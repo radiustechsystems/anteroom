@@ -92,7 +92,7 @@ trusted_proxies = []              # CIDRs whose X-Forwarded-For is believed.
 # ---------------------------------------------------------------------------
 # Logging. Default is text at info — a terminal. json is the usual choice
 # under Kubernetes; logfmt is the usual choice for Grafana Alloy / Promtail.
-# `anteroom -v` still forces debug (one hit line per request) regardless of
+# `anteroom serve --verbose` still forces debug (one hit line per request) regardless of
 # level. Request-scoped fields (request_id, and trace_id/span_id when the
 # inbound request carried a W3C traceparent) attach automatically; they are
 # not configured here. Static labels go on every line.
@@ -283,7 +283,7 @@ allow_hosted_fetchers = true             # Claude-User, ChatGPT-User, Google-Age
 # (off by default, above); there is still no dashboard and no telemetry — the
 # gate exposes counters for YOUR scraper and phones home to nobody.
 #
-# Run with -v to log one line per request naming which rung of the ladder answered
+# Run `anteroom serve --verbose` to log one line per request naming which rung of the ladder answered
 # it; useful when a request is being walled and you want to know why. Each line
 # carries request_id (honoring inbound X-Request-ID, or generated) so it joins
 # the upstream's logs. format = "json" under [log] if a collector will parse it.

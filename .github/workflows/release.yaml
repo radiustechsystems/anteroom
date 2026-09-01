@@ -390,7 +390,7 @@ jobs:
             echo "tar xzf anteroom_${TAG}_linux_amd64.tar.gz"
             echo "cd anteroom_${TAG}_linux_amd64"
             echo "cp anteroom.example.toml anteroom.toml   # then set upstream"
-            echo "./anteroom -config anteroom.toml"
+            echo "./anteroom serve --config anteroom.toml"
             echo '```'
             echo
             echo "Check what you downloaded against \`SHA256SUMS\`, and check \`SHA256SUMS\`"

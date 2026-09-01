@@ -262,7 +262,7 @@ func TestT0_7_GracefulShutdown(t *testing.T) {
 	}
 }
 
-// TestT0_8_HealthcheckWithoutAShell is why the -healthcheck flag exists. A
+// TestT0_8_HealthcheckWithoutAShell is why the healthcheck verb exists. A
 // distroless image has nothing for a shell-form HEALTHCHECK to run, so without
 // it the image can only be probed from outside — which is precisely when nobody
 // does it.

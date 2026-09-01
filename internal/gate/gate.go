@@ -357,7 +357,7 @@ func upstreamTransport(socket string) *http.Transport {
 // throughput counters can attribute its response bytes to the rung that
 // answered; the recorder forwards Flush and exposes Unwrap, so streaming and
 // hijacking behave exactly as with a bare ResponseWriter. With debug logging on
-// (`anteroom -v`) it also reports one line per request: which rung answered,
+// (`anteroom serve --verbose`) it also reports one line per request: which rung answered,
 // and what the visitor got.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.met.inFlight.Inc()
@@ -580,7 +580,7 @@ func (g *Gate) noteInjectionSkipped(r *http.Request, reason string) {
 		"example_path", r.URL.Path,
 		"consequence", "the pass is not renewed from this response, so the visitor is walled again when it expires",
 		"fix", "docs/operating.md, \"Guidance for HTML injection and CSP\"",
-		"note", "reported once per reason; run with -v for one line per request")
+		"note", "reported once per reason; run serve --verbose for one line per request")
 }
 
 // recorder captures the status and size of a response, for the throughput

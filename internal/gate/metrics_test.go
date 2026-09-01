@@ -48,7 +48,7 @@ func wantSample(t *testing.T, g *Gate, line string) {
 }
 
 // TestRequestsCountedByDecision pins the request counter to the ladder
-// vocabulary — and, unlike the -v log, it must count with logging off, because
+// vocabulary — and, unlike the serve --verbose log, it must count with logging off, because
 // a scraper is exactly the consumer that runs when nobody is watching.
 func TestRequestsCountedByDecision(t *testing.T) {
 	tests := []struct {

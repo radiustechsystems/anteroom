@@ -461,7 +461,7 @@ keeps settlement retry separate from replaying an upstream mutation.
 
 ## Watching what the gate decides
 
-`anteroom -v` logs one line per request naming the rung of the ladder that
+`anteroom serve --verbose` logs one line per request naming the rung of the ladder that
 answered it — `own-endpoint`, `bypass-path`, `bypass-ip`, `bypass-crawler`,
 `crawler-verification-unavailable`, `crawler-unverified`, `bypass-hosted`,
 `hosted-refusal`, `hosted-unverified`,
@@ -488,7 +488,7 @@ exports.
 
 Log encoding is configured under `[log]`. The default is `text` at `info` — a
 terminal. Collectors want `json`; Grafana Alloy / Promtail want `logfmt`.
-`anteroom -v` still forces debug regardless of `log.level`. Static labels
+`anteroom serve --verbose` still forces debug regardless of `log.level`. Static labels
 (`[log.labels]`) land on every line; request-scoped fields attach through
 context and do not need repeating at each call site.
 
@@ -729,7 +729,7 @@ Debian trixie's 1.24 builds the tree with `GOTOOLCHAIN=local` and no network.
 Older distributions need a newer toolchain than their default: Ubuntu 22.04 LTS
 ships 1.18 and Debian bookworm 1.19. Reaching either was measured and rejected.
 Below 1.21 there is no `log/slog`, whose output is not private detail — the
-acceptance suite greps the `-v` decision vocabulary and the metrics label set is
+acceptance suite greps the `serve --verbose` decision vocabulary and the metrics label set is
 built on the same words — and below 1.20 there is no
 `http.NewResponseController`, the one line that puts a read deadline on the
 unauthenticated answer endpoint. Shipping a slowloris hole to widen distro

@@ -44,7 +44,7 @@ func newGateMetrics() *gateMetrics {
 	return &gateMetrics{
 		registry: r,
 		requests: r.CounterVec("anteroom_http_requests_total",
-			"Requests handled, by the ladder rung that answered (the same vocabulary as `anteroom -v` and the docs).",
+			"Requests handled, by the ladder rung that answered (the same vocabulary as `anteroom serve --verbose` and the docs).",
 			"decision", decisionLabels()...),
 		inFlight: r.Gauge("anteroom_http_requests_in_flight",
 			"Requests currently being handled, including long-lived streams."),

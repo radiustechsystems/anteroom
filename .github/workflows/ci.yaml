@@ -113,6 +113,32 @@ jobs:
         if: always()
         run: docker ps -a --filter 'name=artest-' -q | xargs -r docker rm -f
 
+  k6-smoke:
+    # A minute of the load test's traffic mix (bench/k6/smoke.js) with only
+    # functional thresholds: the solver written from the served instructions
+    # still earns passes, every population gets the answer the ladder promises,
+    # and the gate reached the upstream every time. No latency thresholds —
+    # this workflow is release.yaml's definition of "verified", and a shared
+    # runner's speed is not a property of the code. Latency is bench.yaml's job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: smoke (k6)
+        run: make load-smoke
+      - name: report
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat bench/results/smoke-latest.txt 2>/dev/null || echo "no summary written"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: leave no containers behind
+        if: always()
+        run: make bench-down
+
   browser:
     # Real engines cover the service-worker, renewal, and JavaScript fallback
     # behavior that unit and container-only tests cannot execute.

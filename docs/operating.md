@@ -207,6 +207,15 @@ redirect to HTTPS — which then loops. That stripping is why the value your app
 is trustworthy — but it means Anteroom must be the only thing writing it, and
 that it must know which peer to believe.
 
+On the other side, between the gate and your application, connections are
+kept alive and reused: the gate holds up to 512 idle connections to the
+upstream and opens a new one only when every kept connection is busy, so the
+number open at once tracks the concurrency your traffic actually has. If your
+application caps concurrent connections, that is the figure to size against.
+(A proxy that kept only a couple would turn every request into a TCP handshake
+and a `TIME_WAIT` socket, which is measurably the first thing to give way under
+load — [benchmarking.md](benchmarking.md), "Finding the peak".)
+
 ## Tuning the puzzle
 
 `difficulty` is bits of work. Defaults are 14 for admission and 6 for renewal —
@@ -233,6 +242,11 @@ for a renewal. Two constraints worth knowing:
   working until it expires. It must be at least `pass_ttl`: a cap shorter than a
   single pass would elapse before the first renewal was even due, so the gate
   refuses that config at startup instead of quietly making renewal impossible.
+
+"About a second" is a laptop figure. To measure solve cost and the gate's own
+overhead per rung on your hardware, see [benchmarking.md](benchmarking.md) —
+`make bench` from a checkout, including how to run at your production
+`difficulty`.
 
 ## What Anteroom breaks, and how to fix it
 
@@ -527,6 +541,12 @@ described below — no per-visitor state. Nothing is ever pushed anywhere.
 | `go_memstats_*`, `go_goroutines`, `process_start_time_seconds` | process health: memory, goroutines, start time |
 | `anteroom_build_info` | constant 1; the labels identify the running build (see below) |
 | `anteroom_tracked_ips` | IPs currently in the activity log; only present when `[activity]` is configured. A count — the addresses themselves never appear in metrics |
+
+The benchmark harness reads the same counters through `/stats` before and after
+a run and asserts on the difference — that `anteroom_upstream_errors_total` did
+not grow, that every answer verified, that passes were minted — which is a
+reasonable template for a synthetic check against a live deployment too
+([benchmarking.md](benchmarking.md)).
 
 ### The activity log (`/activity`)
 

@@ -1,0 +1,42 @@
+# Policy for the second gate in the benchmark stack: anteroom.toml with
+# `inject = false` and no other change. The pass_html_inject and
+# pass_html_noinject scenarios in bench/k6/benchmark.js fetch the same page from
+# the two gates; the difference between them is what the streaming HTML rewriter
+# costs. Keep this file in lockstep with anteroom.toml — a second difference
+# would be measured as if it were injection.
+#
+# All interfaces inside the container; compose publishes them (docs/docker.md,
+# trap 2: the shipped default is loopback within the container).
+listen = ":8080"
+
+# The operator port: /metrics, /stats, /healthz. UNAUTHENTICATED by design, so
+# compose publishes it to 127.0.0.1 only. The k6 container reaches it over the
+# compose network as anteroom:8090.
+admin_listen = ":8090"
+
+# `upstream` comes from ANTEROOM_UPSTREAM in compose.yaml ("app:3000").
+
+pass_ttl    = "60s"   # also the solve deadline, measured from challenge issue
+max_session = "30m"
+difficulty  = 10      # ~1k hashes per admission; production is 14 (~16k)
+renew_difficulty = 6
+inject = false        # the ONLY difference from anteroom.toml: no renewal-script injection
+
+# The reference wait page, mounted read-only from examples/anteroomized/pages.
+# It is re-read from disk on every challenge, so the wait_page scenario measures
+# that read too — as it would in production.
+pages = "/etc/anteroom/pages"
+
+allow_insecure_context = false
+trusted_proxies = []
+
+[bypass]
+# The reference list plus /healthz for the readiness probe. bypass_small and
+# the k6 readiness check use /robots.txt and /healthz respectively; neither
+# earns a pass.
+paths = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*", "/webhooks/*", "/healthz"]
+cidrs = []
+
+[triage]
+json_accept    = true
+ok_body_agents = ["claude-user"]

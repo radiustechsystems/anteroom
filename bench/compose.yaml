@@ -1,0 +1,126 @@
+# The benchmark stack: two gates in front of one app, and a k6 container that
+# runs the scripts in ./k6 against them from inside the compose network.
+#
+# Modelled on examples/anteroomized/compose.yaml — same image, same hardening,
+# same app — with the differences a measurement needs:
+#
+#   * two gates, identical except `inject`, so the HTML rewriter's cost is a
+#     subtraction rather than a guess (bench/anteroom.noinject.toml);
+#   * the admin listener is on and published to loopback only, because /stats
+#     is unauthenticated and is what the scripts diff before and after a run;
+#   * a fast healthcheck override: the image's own probe fires every 30s, which
+#     is right for production and wrong for `up --wait`;
+#   * k6 sits behind a compose profile so `up` never starts it. It runs via
+#     `docker compose run --rm k6 run /scripts/<name>.js` — see the Makefile.
+#
+# k6 also reaches the app directly (http://app:3000). That is the "direct"
+# baseline: what a request costs with no gate at all. It is the same shortcut
+# acceptance/fixtures/compose.probe.yaml takes, and equally never part of a real
+# deployment.
+
+name: arbench
+
+x-gate: &gate
+  build:
+    context: ../
+    dockerfile: Dockerfile
+  image: anteroom:local
+  environment:
+    - ANTEROOM_UPSTREAM=app:3000
+    - ANTEROOM_HMAC_KEY=${ANTEROOM_HMAC_KEY:?set ANTEROOM_HMAC_KEY — `make bench` writes bench/.env}
+  healthcheck:
+    test: ["CMD", "/anteroom", "-config", "/etc/anteroom/anteroom.toml", "-healthcheck"]
+    interval: 2s
+    timeout: 3s
+    retries: 20
+    start_period: 1s
+  depends_on:
+    app:
+      condition: service_started
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  anteroom:
+    <<: *gate
+    # Peak finding needs the gate to run out of CPU before k6 does, since they
+    # share a machine. BENCH_GATE_CPUS=2 caps the gate at two cores and makes
+    # the result quotable per core; 0 is Docker's "no limit" and the default.
+    cpus: ${BENCH_GATE_CPUS:-0}
+    ports:
+      # For a k6 binary on the host (docs/benchmarking.md). Unused in compose
+      # mode, where k6 talks to anteroom:8080 over the bridge.
+      - "${GATE_PORT:-18080}:8080"
+      # The operator port. Loopback only: /stats and /metrics have no auth.
+      - "127.0.0.1:${ADMIN_PORT:-18090}:8090"
+    volumes:
+      # BENCH_CONFIG lets a run swap policies without editing the committed
+      # file: `BENCH_CONFIG=./local/d14.toml make load` (bench/local is
+      # gitignored). Note .gitignore: every anteroom.toml is ignored unless
+      # excepted, and a missing file here becomes a directory at the mount
+      # point and a gate that fails with "not a directory".
+      - ${BENCH_CONFIG:-./anteroom.toml}:/etc/anteroom/anteroom.toml:ro
+      - ../examples/anteroomized/pages:/etc/anteroom/pages:ro
+      - anteroom_state:/var/lib/anteroom
+
+  anteroom-noinject:
+    <<: *gate
+    # No host ports: only k6 talks to this one.
+    volumes:
+      - ./anteroom.noinject.toml:/etc/anteroom/anteroom.toml:ro
+      - ../examples/anteroomized/pages:/etc/anteroom/pages:ro
+      - anteroom_noinject_state:/var/lib/anteroom
+
+  app:
+    build: ../examples/hello-app
+    image: hello-app:local
+    # `expose`, not `ports`, as in the reference deployment. k6 reaches it by
+    # service name; the host does not.
+    expose:
+      - "3000"
+    environment:
+      - HELLO_LISTEN=:3000
+
+  k6:
+    # Pinned. `K6_IMAGE=grafana/k6:2.2.0 make bench` tries another; the scripts
+    # use only the stable k6/http, k6/crypto and k6/metrics modules.
+    image: ${K6_IMAGE:-grafana/k6:1.8.1}
+    profiles: [k6]
+    # The image runs as uid 12345. Results are written to a bind mount, so run
+    # as the invoking user or the files come back root- or 12345-owned. The
+    # Makefile sets these from `id -u` / `id -g`.
+    user: "${BENCH_UID:-1000}:${BENCH_GID:-1000}"
+    volumes:
+      - ./k6:/scripts:ro
+      - ./results:/results
+    environment:
+      - BASE_URL=http://anteroom:8080
+      - ADMIN_URL=http://anteroom:8090
+      - NOINJECT_URL=http://anteroom-noinject:8080
+      - APP_URL=http://app:3000
+      - RESULTS_DIR=/results
+      # Knobs, documented in docs/benchmarking.md.
+      - BENCH_RATE=${BENCH_RATE:-200}
+      - BENCH_DURATION=${BENCH_DURATION:-20s}
+      - LOAD_SCALE=${LOAD_SCALE:-1}
+      # peak.js; empty means the script's default (docs/benchmarking.md).
+      - PEAK=${PEAK:-}
+      - PEAK_START=${PEAK_START:-}
+      - PEAK_STEP=${PEAK_STEP:-}
+      - PEAK_MAX=${PEAK_MAX:-}
+      - PEAK_RAMP_S=${PEAK_RAMP_S:-}
+      - PEAK_HOLD_S=${PEAK_HOLD_S:-}
+      - PEAK_P99_MS=${PEAK_P99_MS:-}
+      - PEAK_VUS=${PEAK_VUS:-}
+      - PEAK_MAX_DROPPED=${PEAK_MAX_DROPPED:-}
+    depends_on:
+      anteroom:
+        condition: service_healthy
+      anteroom-noinject:
+        condition: service_healthy
+
+volumes:
+  anteroom_state:
+  anteroom_noinject_state:

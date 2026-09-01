@@ -19,6 +19,9 @@ anteroom.toml
 # directory where the file should be, and the container fails to start with
 # "not a directory".
 !examples/*/anteroom.toml
+# ...and the benchmark stack's, for the same reason (bench/compose.yaml
+# bind-mounts it). anteroom.noinject.toml is not caught by the pattern.
+!bench/anteroom.toml
 log/
 run
 
@@ -29,3 +32,9 @@ run
 
 # example deployment secrets
 examples/anteroomized/.env
+
+# benchmark stack: its key, its results, and local policy variants
+bench/.env
+bench/results/*
+!bench/results/.gitkeep
+bench/local/

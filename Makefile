@@ -2,7 +2,9 @@
 #
 # `make check` is what CI runs on every commit and what you should run before
 # pushing. `make acceptance` is the end-to-end suite; it needs Docker and takes
-# minutes rather than seconds, so it is separate on purpose.
+# minutes rather than seconds, so it is separate on purpose. `make bench` and
+# `make load` are the k6 harness (bench/, docs/benchmarking.md): also Docker,
+# also minutes, also separate.
 
 GO ?= go
 
@@ -68,6 +70,12 @@ help:
 	@echo "acceptance-browser tier 2 in a real browser (needs Playwright)"
 	@echo "example-up         run the reference deployment at localhost:8080"
 	@echo "example-down       tear it down"
+	@echo "bench              k6: per-rung latency and throughput (needs Docker, ~5 min)"
+	@echo "load               k6: mixed-traffic load test with pass/fail thresholds (needs Docker, ~6 min)"
+	@echo "load-smoke         k6: the ~1 min functional slice of load that CI runs"
+	@echo "peak               k6: step one rung's load up until it breaks (PEAK=refusal|pass_json|...)"
+	@echo "bench-go           Go micro-benchmarks for the pieces k6 cannot isolate"
+	@echo "bench-down         tear the bench stack down"
 	@echo "helm-lint          lint the charts in charts/"
 	@echo "helm-docs          regenerate each chart's README from its values.yaml"
 	@echo "clean-acceptance   remove containers left by an interrupted run"
@@ -182,6 +190,54 @@ example-up:
 example-down:
 	docker compose -f examples/anteroomized/compose.yaml down --volumes
 
+# The k6 harness. Same shape as acceptance: Docker, minutes, its own stack.
+# bench-up writes the signing key the same way example-up does, then brings the
+# two gates and the app up and waits for their healthchecks. BENCH_UID/GID make
+# the k6 container write results as the invoking user (bench/compose.yaml).
+BENCH_COMPOSE = BENCH_UID=$$(id -u) BENCH_GID=$$(id -g) docker compose -f bench/compose.yaml
+
+.PHONY: bench-up
+bench-up:
+	@test -f bench/.env || \
+		echo "ANTEROOM_HMAC_KEY=$$(openssl rand -base64 32)" > bench/.env
+	@mkdir -p bench/results
+	$(BENCH_COMPOSE) up -d --build --wait anteroom anteroom-noinject app
+
+.PHONY: bench
+bench: bench-up
+	$(BENCH_COMPOSE) run --rm k6 run /scripts/benchmark.js
+
+.PHONY: load
+load: bench-up
+	$(BENCH_COMPOSE) run --rm k6 run /scripts/load.js
+
+.PHONY: load-smoke
+load-smoke: bench-up
+	$(BENCH_COMPOSE) run --rm k6 run /scripts/smoke.js
+
+# Peak finding. Samples container CPU beside the run so the report can say
+# whether the gate or k6 was the one that ran out (bench/peak-cpu.sh). k6 exits
+# 99 when a threshold trips, and the climb is *meant* to end by tripping one, so
+# 99 is success here; the report separates the stop conditions from problems.
+PEAK ?= refusal
+.PHONY: peak
+peak: bench-up
+	@bench/peak-cpu.sh bench/results/peak-cpu.log & pid=$$!; \
+	PEAK=$(PEAK) $(BENCH_COMPOSE) run --rm k6 run /scripts/peak.js; rc=$$?; \
+	kill $$pid 2>/dev/null; wait $$pid 2>/dev/null; \
+	bench/peak-cpu.sh --report bench/results/peak-cpu.log; \
+	[ $$rc -eq 99 ] && rc=0; exit $$rc
+
+# -run '^$$' skips the tests so only benchmarks execute. Numbers are only
+# comparable on one machine across runs; use -count=N and benchstat for that.
+.PHONY: bench-go
+bench-go:
+	$(GO) test -run '^$$' -bench . -benchmem ./...
+
+.PHONY: bench-down
+bench-down:
+	docker compose -f bench/compose.yaml down --volumes --remove-orphans
+
 # Chart READMEs are generated: prose lives in README.md.gotmpl, the values
 # table in values.yaml's `# --` comments. Edit those, never README.md itself.
 # helm-docs: https://github.com/norwoodj/helm-docs
@@ -197,3 +253,4 @@ helm-lint:
 clean-acceptance:
 	@docker ps -a --filter 'name=artest-' -q | xargs -r docker rm -f
 	@docker ps -a --filter 'name=artier2-' -q | xargs -r docker rm -f
+	@docker ps -a --filter 'name=arbench-' -q | xargs -r docker rm -f

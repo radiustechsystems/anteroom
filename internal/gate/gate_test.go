@@ -67,7 +67,7 @@ func (v *testCrawlerVerifier) Verify(_ context.Context, _ string, addr netip.Add
 
 // newTestGate spins up an upstream that echoes a marker, and a gate in front
 // of it built from a config file body.
-func newTestGate(t *testing.T, cfgBody string) (*Gate, *httptest.Server) {
+func newTestGate(t testing.TB, cfgBody string) (*Gate, *httptest.Server) {
 	t.Helper()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Upstream", "yes")
@@ -120,7 +120,7 @@ func agentReq(path string) *http.Request {
 // shape mutators are applied to both the challenge and answer requests — the
 // pass binds to the solving client's User-Agent, so a test presenting the
 // cookie under a particular UA must earn it under that UA too.
-func solveAndGetCookie(t *testing.T, g *Gate, withCookie *http.Cookie, shape ...func(*http.Request)) *http.Cookie {
+func solveAndGetCookie(t testing.TB, g *Gate, withCookie *http.Cookie, shape ...func(*http.Request)) *http.Cookie {
 	t.Helper()
 	cr := httptest.NewRequest("GET", pathChallenge, nil)
 	if withCookie != nil {

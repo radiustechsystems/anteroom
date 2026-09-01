@@ -17,8 +17,9 @@ import (
 
 // The proxy must reuse its connections to the upstream. Go's default transport
 // keeps two idle per host, which under load turns every request into a TCP
-// handshake and a TIME_WAIT socket — measurably the gate's first ceiling, and
-// nothing to do with the gate's own work. This test pins the property the fix
+// handshake and a TIME_WAIT socket — the gate's first ceiling as the bench
+// harness found it (docs/benchmarking.md, "Finding the peak"), and nothing to
+// do with the gate's own work. This test pins the property the fix
 // provides: repeated bursts of concurrent requests reuse the connections the
 // first burst opened. With two idle connections kept, each burst opens about
 // `burst` new ones and the total grows every round; with the pool sized to the

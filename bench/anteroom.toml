@@ -1,0 +1,55 @@
+# Policy for the benchmark stack (bench/compose.yaml, k6 scripts in bench/k6/).
+#
+# Start from examples/anteroomized/anteroom.toml — the reference deployment the
+# acceptance suite runs against — and change exactly three things, each for a
+# reason a measurement depends on:
+#
+#   admin_listen  on, so k6 can read /stats before and after a run and report
+#                 what the gate itself counted (bench/k6/lib/stats.js);
+#   difficulty    10 instead of 14, so the load generator solving puzzles in
+#                 JavaScript is not the bottleneck being measured. Sixteen times
+#                 cheaper per solve; the gate's verification cost (one SHA-256
+#                 plus an HMAC) is the same either way. docs/benchmarking.md
+#                 explains how to run at the production setting;
+#   /healthz      added to the bypass list, so a k6 readiness probe can reach the
+#                 app through the gate without earning a pass.
+#
+# Everything else matches the reference so the numbers describe the gate people
+# actually deploy. Unknown keys are a startup error — spell-check against
+# anteroom.example.toml.
+
+# All interfaces inside the container; compose publishes them (docs/docker.md,
+# trap 2: the shipped default is loopback within the container).
+listen = ":8080"
+
+# The operator port: /metrics, /stats, /healthz. UNAUTHENTICATED by design, so
+# compose publishes it to 127.0.0.1 only. The k6 container reaches it over the
+# compose network as anteroom:8090.
+admin_listen = ":8090"
+
+# `upstream` comes from ANTEROOM_UPSTREAM in compose.yaml ("app:3000").
+
+pass_ttl    = "60s"   # also the solve deadline, measured from challenge issue
+max_session = "30m"
+difficulty  = 10      # ~1k hashes per admission; production is 14 (~16k)
+renew_difficulty = 6
+inject = true         # anteroom.noinject.toml is this file with inject = false
+
+# The reference wait page, mounted read-only from examples/anteroomized/pages.
+# It is re-read from disk on every challenge, so the wait_page scenario measures
+# that read too — as it would in production.
+pages = "/etc/anteroom/pages"
+
+allow_insecure_context = false
+trusted_proxies = []
+
+[bypass]
+# The reference list plus /healthz for the readiness probe. bypass_small and
+# the k6 readiness check use /robots.txt and /healthz respectively; neither
+# earns a pass.
+paths = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*", "/webhooks/*", "/healthz"]
+cidrs = []
+
+[triage]
+json_accept    = true
+ok_body_agents = ["claude-user"]

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/radiustechsystems/anteroom/internal/hosted"
+	"github.com/radiustechsystems/anteroom/internal/logging"
 )
 
 // requestFacts is the immutable, header-derived view of a request. Parsing it
@@ -32,6 +33,7 @@ type gateRequest struct {
 }
 
 func (g *Gate) inspect(r *http.Request) *gateRequest {
+	r = logging.BindRequest(r)
 	ip, err := g.match.ClientIP(r)
 	if err != nil {
 		ip = netip.Addr{}

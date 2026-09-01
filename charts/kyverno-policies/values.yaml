@@ -163,6 +163,13 @@ gateConfig: |
   renew_difficulty = 6  # renewals are cheap by design (mobile battery)
   inject = true         # add the renewal script to proxied HTML
 
+  # Logging. Default is text at info. json is the usual choice in-cluster.
+  # [log]
+  # level  = "info"     # debug | info | warn | error. -v still forces debug.
+  # format = "json"     # json | logfmt | text
+  # [log.labels]
+  # cluster = "prod"
+
   # Trap 1 in docs/docker.md, and it applies with full force to
   # Kubernetes: WebCrypto and service workers require a secure
   # context — HTTPS or localhost. Reaching a NodePort at

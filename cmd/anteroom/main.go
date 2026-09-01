@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +21,7 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/admin"
 	"github.com/radiustechsystems/anteroom/internal/config"
 	"github.com/radiustechsystems/anteroom/internal/gate"
+	"github.com/radiustechsystems/anteroom/internal/logging"
 )
 
 // bindError supplies the context the standard library's message lacks: a
@@ -59,11 +59,6 @@ func run() error {
 	check := flag.Bool("healthcheck", false, "probe the local gate's health endpoint and exit 0 (healthy) or 1; for container HEALTHCHECK, which has no shell to run curl in")
 	flag.Parse()
 
-	level := slog.LevelInfo
-	if *verbose {
-		level = slog.LevelDebug
-	}
-	lg := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
@@ -73,6 +68,7 @@ func run() error {
 		return healthcheck(cfg.Listen)
 	}
 
+	lg := logging.New(os.Stderr, cfg.Log, *verbose)
 	g, err := gate.New(cfg, lg)
 	if err != nil {
 		return err

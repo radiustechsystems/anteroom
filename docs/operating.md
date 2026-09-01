@@ -470,7 +470,7 @@ answered it — `own-endpoint`, `bypass-path`, `bypass-ip`, `bypass-crawler`,
 duration:
 
 ```
-level=DEBUG msg=hit method=GET path=/index.html decision=pass-pow status=200 bytes=142 dur=1.2ms ip=203.0.113.9 ua=Mozilla/5.0…
+level=DEBUG msg=hit method=GET path=/index.html decision=pass-pow status=200 bytes=142 dur=1.2ms ip=203.0.113.9 ua=Mozilla/5.0… request_id=…
 ```
 
 This is the fastest way to answer "why was this request walled?", which is
@@ -479,6 +479,29 @@ off by default because a proxy that logs every hit at INFO teaches operators to
 ignore its logs. Note the line includes the client IP and user agent, so it is
 request-level data — appropriate for debugging, not for leaving on in production
 without deciding that is what you want.
+
+Every request also carries a `request_id` (honoring inbound `X-Request-ID` or
+`X-Correlation-ID`, otherwise generated) and, when the client sent a W3C
+`traceparent`, `trace_id` and `span_id`. The same `X-Request-ID` is forwarded
+upstream so the application's logs join. The gate does not mint spans it never
+exports.
+
+Log encoding is configured under `[log]`. The default is `text` at `info` — a
+terminal. Collectors want `json`; Grafana Alloy / Promtail want `logfmt`.
+`anteroom -v` still forces debug regardless of `log.level`. Static labels
+(`[log.labels]`) land on every line; request-scoped fields attach through
+context and do not need repeating at each call site.
+
+```toml
+[log]
+level  = "info"     # debug | info | warn | error
+format = "json"     # json | logfmt | text
+[log.labels]
+service = "anteroom"
+```
+
+`ANTEROOM_LOG_LEVEL` and `ANTEROOM_LOG_FORMAT` override the file, the same way
+`ANTEROOM_LISTEN` does.
 
 ## Monitoring
 

@@ -2,7 +2,8 @@
 #
 # This file is the public configuration contract.
 # Only `upstream` is required. Environment variables override the file:
-# ANTEROOM_LISTEN, ANTEROOM_ADMIN_LISTEN, ANTEROOM_UPSTREAM, ANTEROOM_HMAC_KEY, ...
+# ANTEROOM_LISTEN, ANTEROOM_ADMIN_LISTEN, ANTEROOM_UPSTREAM, ANTEROOM_HMAC_KEY,
+# ANTEROOM_LOG_LEVEL, ANTEROOM_LOG_FORMAT, ...
 
 listen   = "127.0.0.1:8080"       # bind address. Loopback by default: the documented
                                   # topology puts a TLS terminator in front, and a gate
@@ -87,6 +88,20 @@ trusted_proxies = []              # CIDRs whose X-Forwarded-For is believed.
 #[[hmac_keys]]
 #kid = "k1"
 #key = "base64..."
+
+# ---------------------------------------------------------------------------
+# Logging. Default is text at info — a terminal. json is the usual choice
+# under Kubernetes; logfmt is the usual choice for Grafana Alloy / Promtail.
+# `anteroom -v` still forces debug (one hit line per request) regardless of
+# level. Request-scoped fields (request_id, and trace_id/span_id when the
+# inbound request carried a W3C traceparent) attach automatically; they are
+# not configured here. Static labels go on every line.
+# ---------------------------------------------------------------------------
+# [log]
+# level  = "info"    # debug | info | warn | error
+# format = "text"    # json | logfmt | text
+# [log.labels]
+# service = "anteroom"
 
 # ---------------------------------------------------------------------------
 # Challenge-activity log (optional). Omit this whole section to keep the gate
@@ -269,7 +284,9 @@ allow_hosted_fetchers = true             # Claude-User, ChatGPT-User, Google-Age
 # gate exposes counters for YOUR scraper and phones home to nobody.
 #
 # Run with -v to log one line per request naming which rung of the ladder answered
-# it; useful when a request is being walled and you want to know why.
+# it; useful when a request is being walled and you want to know why. Each line
+# carries request_id (honoring inbound X-Request-ID, or generated) so it joins
+# the upstream's logs. format = "json" under [log] if a collector will parse it.
 #
 # Before going live, read docs/operating.md — it lists what Anteroom breaks
 # without bypass rules (webhooks, OAuth callbacks, API clients, feeds, link

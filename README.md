@@ -107,8 +107,9 @@ your own site a second later. Startup warnings are worth reading: an
 auto-generated HMAC key means passes die on restart and no second instance can
 verify them, which is fine for a first run and wrong in production.
 
-`ANTEROOM_LISTEN`, `ANTEROOM_UPSTREAM`, `ANTEROOM_PAGES`, and `ANTEROOM_HMAC_KEY`
-override the file, for containers and secret managers.
+`ANTEROOM_LISTEN`, `ANTEROOM_UPSTREAM`, `ANTEROOM_PAGES`, `ANTEROOM_HMAC_KEY`,
+`ANTEROOM_LOG_LEVEL`, and `ANTEROOM_LOG_FORMAT` override the file, for containers
+and secret managers.
 
 Run with `-v` to log one line per request naming which rung of the ladder answered
 it (`pass-pow`, `wait-page`, `refusal`, `bypass-path`, …) with the status, size,

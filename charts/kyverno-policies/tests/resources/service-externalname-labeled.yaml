@@ -1,0 +1,14 @@
+# Labeled by mistake: an ExternalName Service has no spec.ports at all, and
+# there is nothing here to proxy. Kyverno errors rather than yielding an empty
+# list on the missing field, and a mutate error is an admission denial under
+# the default failurePolicy — so this has to be skipped, not refused.
+apiVersion: v1
+kind: Service
+metadata:
+  name: extern
+  namespace: hello
+  labels:
+    anteroom.radiustech.xyz/proxied: enabled
+spec:
+  type: ExternalName
+  externalName: example.com

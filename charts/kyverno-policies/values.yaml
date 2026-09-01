@@ -25,6 +25,25 @@ policies:
   # -- Create the generate rule that provisions the per-namespace ConfigMap
   # holding `gateConfig` below.
   generateConfig: true
+  # -- Record each labeled Service's original `spec.ports` in the annotation
+  # `anteroom.radiustech.xyz/original-ports` before rewriting it, and restore
+  # them when the `proxied` label is removed. Without this, removing the label
+  # leaves the Service targeting the port name `anteroom`, which blackholes it
+  # once the pods roll ungated — a mutation is stored, not overlaid, so
+  # nothing else can put the value back. The restore rule matches Services
+  # *without* the label, i.e. nearly all of them, which costs one extra rule
+  # evaluation per Service admission and no extra webhook traffic: Kyverno
+  # registers webhooks per kind and operation, so every Service create and
+  # update already reached it for the rewrite rule. The rule short-circuits on
+  # the missing annotation.
+  restoreService: true
+  # -- Create the Audit-mode policy that reports pods carrying the inject
+  # label but no gate container. That combination means a pod was admitted
+  # while injection was off or broken, and it is worth a report because it is
+  # invisible from the outside and blackholes any Service already rewritten
+  # to `anteroom`. Audit only — it never blocks admission — and it matches
+  # only opted-in pods, so it reports on nothing you did not label.
+  auditDrift: true
 
 sidecar:
   # -- Compute for the injected gate: one binary proxying one app, so modest
@@ -46,6 +65,17 @@ sidecar:
       drop: [ALL]
     seccompProfile:
       type: RuntimeDefault
+
+# -- Keep generated resources when the policy or the whole chart is removed.
+# Worth understanding before `helm uninstall`, because Kyverno's default is not
+# symmetric: what the chart generates from data in the policy — the ConfigMap,
+# and the NetworkPolicy when `admin.networkPolicy.enabled` is on — is DELETED
+# in every namespace when the policy goes, while the HMAC Secret is a clone and
+# clones are retained. Set this to true and the generated copies outlive the
+# chart in every namespace — right when the chart is being replaced or moved
+# rather than withdrawn, and wrong if you expect uninstall to leave nothing
+# behind.
+orphanDownstreamOnPolicyDelete: false
 
 # The gate's operator listener: /metrics (Prometheus text), /stats, /activity,
 # and /healthz. `gateConfig` binds it to the pod's loopback, where nothing on

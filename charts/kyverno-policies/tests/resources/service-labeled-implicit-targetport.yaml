@@ -1,0 +1,17 @@
+# A port with NO targetPort: it defaults to `port` when the Service is
+# resolved, and the default lives nowhere in the stored spec. Recording the
+# ports has to preserve that absence, or opting out would invent a targetPort
+# the author never wrote.
+apiVersion: v1
+kind: Service
+metadata:
+  name: implicit
+  namespace: hello
+  labels:
+    anteroom.radiustech.xyz/proxied: enabled
+spec:
+  selector:
+    app: implicit
+  ports:
+    - name: http
+      port: 8080

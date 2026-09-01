@@ -1,5 +1,6 @@
 {{- /*
-Point the Service at the gate instead of the app.
+Point the Service at the gate instead of the app — and be able to point it
+back.
 
 Injection alone changes nothing about routing: the Service still resolves its
 targetPort against the app container and traffic flows past the gate, which
@@ -15,6 +16,22 @@ Deliberately blunt: EVERY port is rewritten. A Service that also exposes a
 side channel (gRPC, a metrics port) should not carry the label — split the
 HTTP port into its own labeled Service instead. The gate proxies HTTP; it is
 not a general TCP proxy.
+
+THE REMOVAL PROBLEM, and the annotation that solves it. A mutation is not a
+view over the manifest; it is baked into the stored object. So removing the
+`proxied` label does not put `targetPort` back — Kyverno only ever runs at
+admission, and by then the original value is gone. Left there, the Service
+keeps targeting a port name that no container carries once the pods are
+rolled ungated, which blackholes it: the failure the example README warns
+about under "remove the Service label first".
+
+Kyverno can undo it, but only if the original was written down first, so
+rule 1 records `spec.ports` verbatim into an annotation before rule 2
+rewrites it and rule 3 restores it when the label goes away. Recording the
+whole array rather than a port-by-port map is what makes the restore exact:
+a port that had no explicit targetPort had none for a reason (it defaults to
+`port` at resolution time), and a map of ports to values cannot express
+"this key was absent" without more machinery than the job is worth.
 */ -}}
 {{- if .Values.policies.routeService }}
 apiVersion: kyverno.io/v1
@@ -31,17 +48,77 @@ metadata:
       Rewrites the targetPort of every port on Services labeled
       anteroom.radiustech.xyz/proxied=enabled to the named port "anteroom", so
       cluster traffic reaches the injected gate rather than the application
-      container directly.
+      container directly, recording the original ports so that removing the
+      label restores them.
 spec:
   rules:
+    {{- if .Values.policies.restoreService }}
+    # Rule 1: write down what we are about to overwrite.
+    #
+    # Ordering is load-bearing and it is the rule order in this file: rules
+    # run top to bottom and each sees the previous rule's output, so this must
+    # sit above the rewrite or it would record "anteroom" as the original.
+    - name: record-original-ports
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+              operations: [CREATE, UPDATE]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/proxied: enabled
+      preconditions:
+        all:
+          {{- include "kyverno-policies.hasPorts" . | nindent 10 }}
+          # Record only when the incoming object arrived UN-rewritten, which
+          # is the test for "these ports are the author's intent". It holds
+          # for the first admission and for every later apply of the manifest,
+          # so an edit to the real targetPort in git is picked up rather than
+          # frozen at whatever the Service looked like the day it was labeled.
+          #
+          # The inverse case is why this is a condition and not just an
+          # annotation-absence check: an update carrying the LIVE object —
+          # `kubectl edit`, a controller resyncing what it read back — already
+          # says "anteroom", and recording that would destroy the record.
+          #
+          # The known limit of that choice, stated plainly: an edit made to the
+          # LIVE Service while it is labeled (adding a port with `kubectl edit`
+          # rather than to the manifest) is not recorded, because the object it
+          # arrives in already says "anteroom". The restore then returns the
+          # ports as they last stood in an un-rewritten object, and that added
+          # port goes with it. Edit the manifest and re-apply, which is the
+          # workflow the rest of this chart assumes anyway.
+          #
+          # The test is over the whole serialized list rather than a targetPort
+          # filter because a Service with no `ports` at all makes a filter
+          # error rather than come back empty. It therefore also matches a port
+          # merely *named* "anteroom", which errs toward not recording — the
+          # safe direction, since a missing record only costs the auto-revert.
+          - key: {{ `"{{ contains(to_string(request.object.spec.ports), 'anteroom') }}"` }}
+            operator: Equals
+            value: false
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            annotations:
+              # JSON, because an annotation value is a string and this has to
+              # survive a round trip through one. Rule 3 parses it back.
+              anteroom.radiustech.xyz/original-ports: {{ `"{{ to_string(request.object.spec.ports) }}"` }}
+    {{- end }}
+
+    # Rule 2: the rewrite itself.
     - name: retarget-ports
       match:
         any:
           - resources:
               kinds: [Service]
+              operations: [CREATE, UPDATE]
               selector:
                 matchLabels:
                   anteroom.radiustech.xyz/proxied: enabled
+      preconditions:
+        all:
+          {{- include "kyverno-policies.hasPorts" . | nindent 10 }}
       mutate:
         foreach:
           - list: "request.object.spec.ports"
@@ -58,4 +135,54 @@ spec:
               - path: {{ `/spec/ports/{{ elementIndex }}/targetPort` }}
                 op: add
                 value: anteroom
+
+    {{- if .Values.policies.restoreService }}
+    # Rule 3: opting out. Restore the recorded ports and drop the record.
+    #
+    # Removing a label is an UPDATE, so this fires on the very request that
+    # takes the label off — the Service is never left targeting a port its
+    # pods will not carry. It also covers deleting the ClusterPolicies with
+    # the labels in place, which is the other order people try: the Service
+    # reverts on its next apply instead of quietly blackholing.
+    - name: restore-original-ports
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+              operations: [CREATE, UPDATE]
+              selector:
+                # NotIn matches a Service that has the key with some other
+                # value AND one that lacks the key entirely — that second half
+                # is documented Kubernetes selector behavior and it is the
+                # case that matters, since opting out means deleting the line.
+                # Using it also means `proxied: disabled` reverts, rather than
+                # landing in a gap between two matchLabels selectors.
+                matchExpressions:
+                  - key: anteroom.radiustech.xyz/proxied
+                    operator: NotIn
+                    values: [enabled]
+      preconditions:
+        all:
+          # No record, nothing to restore — which is every other Service in
+          # the cluster. Matching them all adds no webhook traffic (Kyverno
+          # registers webhooks per kind and operation, so Service admissions
+          # already arrived here for rule 2) and short-circuits on this.
+          - key: {{ `"{{ request.object.metadata.annotations.\"anteroom.radiustech.xyz/original-ports\" || '' }}"` }}
+            operator: NotEquals
+            value: ""
+          # Belt and braces against restoring a record that says "no ports":
+          # `add /spec/ports` with a null value would strip a Service's ports
+          # rather than put them back, so a record that cannot be meant
+          # literally is treated as no record at all.
+          - key: {{ `"{{ request.object.metadata.annotations.\"anteroom.radiustech.xyz/original-ports\" || '' }}"` }}
+            operator: NotEquals
+            value: "null"
+      mutate:
+        patchesJson6902: |-
+          - path: /spec/ports
+            op: add
+            value: {{ `{{ request.object.metadata.annotations."anteroom.radiustech.xyz/original-ports" | parse_json(@) }}` }}
+          - path: /metadata/annotations/anteroom.radiustech.xyz~1original-ports
+            op: remove
+    {{- end }}
 {{- end }}

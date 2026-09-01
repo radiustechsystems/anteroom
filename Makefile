@@ -70,6 +70,7 @@ help:
 	@echo "example-down       tear it down"
 	@echo "helm-lint          lint the charts in charts/"
 	@echo "helm-docs          regenerate each chart's README from its values.yaml"
+	@echo "helm-test          evaluate the Kyverno policies offline (needs kyverno CLI)"
 	@echo "clean-acceptance   remove containers left by an interrupted run"
 
 .PHONY: check
@@ -192,6 +193,14 @@ helm-docs:
 .PHONY: helm-lint
 helm-lint:
 	@for c in charts/*/; do helm lint "$$c" || exit 1; done
+
+# What the policies do, not just that they render: `kyverno apply` evaluates
+# each one against a fixture offline and the results are diffed against
+# committed expectations. Needs the kyverno CLI as well as helm:
+# https://kyverno.io/docs/kyverno-cli/
+.PHONY: helm-test
+helm-test:
+	@for t in charts/*/tests/run.sh; do "$$t" || exit 1; done
 
 .PHONY: clean-acceptance
 clean-acceptance:

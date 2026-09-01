@@ -113,6 +113,35 @@ jobs:
         if: always()
         run: docker ps -a --filter 'name=artest-' -q | xargs -r docker rm -f
 
+  charts:
+    # The Kyverno policies are as much of the product as the binary, and until
+    # this job existed nothing checked them at all: a policy that renders is not
+    # a policy that mutates the right field. `kyverno apply` settles that
+    # offline, against fixtures, with no cluster.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: install kyverno CLI
+        # Pinned: the CLI is the evaluator these expectations were recorded
+        # against, so an unpinned "latest" would let an upstream release rewrite
+        # what CI means without a commit here.
+        env:
+          KYVERNO_VERSION: v1.13.4
+        run: |
+          curl -fsSL -o kyverno.tar.gz \
+            "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz"
+          tar -xzf kyverno.tar.gz kyverno
+          install -m 0755 kyverno /usr/local/bin/kyverno
+          kyverno version
+      - name: helm lint
+        run: make helm-lint
+      - name: policy behavior
+        run: make helm-test
+
   browser:
     # Real engines cover the service-worker, renewal, and JavaScript fallback
     # behavior that unit and container-only tests cannot execute.

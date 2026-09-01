@@ -1,0 +1,23 @@
+# A pod as the injection policy leaves it: the app and the gate beside it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-app-gated
+  namespace: hello
+  labels:
+    app: hello-app
+    anteroom.radiustech.xyz/inject: enabled
+  annotations:
+    anteroom.radiustech.xyz/upstream-port: "3000"
+spec:
+  containers:
+    - name: hello-app
+      image: hello-app:local
+      ports:
+        - name: http
+          containerPort: 3000
+    - name: anteroom
+      image: ghcr.io/radiustechsystems/anteroom:latest
+      ports:
+        - name: anteroom
+          containerPort: 8080

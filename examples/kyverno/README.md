@@ -9,16 +9,18 @@ sidecar mounts — the application manifests never mention Anteroom at all.
 The policies themselves live in the
 [`charts/kyverno-policies`](../../charts/kyverno-policies/) Helm chart at the
 repository root — its README documents the opt-in labels and annotations and
-every value. Three policies, one job each:
+every value. Five policies, one job each:
 
 | Policy | Acts on | What it does |
 | --- | --- | --- |
 | [`inject-anteroom-sidecar`](../../charts/kyverno-policies/templates/clusterpolicy-inject-sidecar.yaml) | Pods | injects the gate as a sidecar proxy container, forwarding to `127.0.0.1:<upstream-port>` |
-| [`route-service-through-anteroom`](../../charts/kyverno-policies/templates/clusterpolicy-route-service.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path |
+| [`route-service-through-anteroom`](../../charts/kyverno-policies/templates/clusterpolicy-route-service.yaml) | Services | rewrites every `targetPort` to the named port `anteroom`, putting the gate in the traffic path — and restores the originals if the label is removed |
 | [`generate-anteroom-config`](../../charts/kyverno-policies/templates/clusterpolicy-generate-config.yaml) | Namespaces | generates the `anteroom-config` ConfigMap and clones the `anteroom` HMAC Secret into the namespace |
+| [`generate-anteroom-networkpolicy`](../../charts/kyverno-policies/templates/clusterpolicy-generate-networkpolicy.yaml) | Namespaces | **opt-in** — fences gated pods so only the gate's port answers on the pod IP |
+| [`audit-anteroom-drift`](../../charts/kyverno-policies/templates/clusterpolicy-audit-drift.yaml) | Pods | reports pods that opted in but carry no gate, the one failure that is invisible from outside |
 
 Plus the chart's [`rbac.yaml`](../../charts/kyverno-policies/templates/rbac.yaml),
-the grant Kyverno's controllers need for what the generate policy manages.
+the grant Kyverno's controllers need for what the generate policies manage.
 This directory holds what the chart deliberately leaves out:
 [`manifests/demo/`](manifests/demo/), a two-replica `hello-app` behind the
 gate, and [`scripts/kind-demo.sh`](scripts/kind-demo.sh), which stands the
@@ -35,6 +37,12 @@ Everything is explicit, and each resource asks for its own rewrite:
 | Pod template | label `anteroom.radiustech.xyz/inject: enabled` | inject the sidecar |
 | Pod template | annotation `anteroom.radiustech.xyz/upstream-port: "3000"` | where the app listens; **required** with the label — a missing port is an admission error, not a guessed default |
 | Service | label `anteroom.radiustech.xyz/proxied: enabled` | rewrite `targetPort` to the gate |
+
+One more piece of metadata appears that you do not write: the policy records a
+labeled Service's original `spec.ports` in the annotation
+`anteroom.radiustech.xyz/original-ports` before overwriting them, which is what
+lets removing the label put them back. See
+[Removing it](#removing-it) below.
 
 The Service does not inherit the pods' opt-in on purpose. At admission a
 Service is just a selector; Kyverno cannot know which pods it will match or
@@ -251,30 +259,49 @@ the same force, because it is the same mechanism.
 *Service* traffic behind the gate, but the pod IP answers on `:3000` to
 anyone in the cluster — the Kubernetes equivalent of the Compose app that
 still publishes its own port. Whether that matters depends on who shares your
-cluster; the fence, if you need one, is a NetworkPolicy admitting only the
-gate's port:
+cluster. The fence is a chart value:
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: only-through-anteroom
-  namespace: hello
-spec:
-  podSelector:
-    matchLabels:
-      anteroom.radiustech.xyz/inject: enabled
-  ingress:
-    - ports:
-        - port: 8080   # numeric: NetworkPolicy resolves numbers, and the
-                       # injected containerPort is always 8080
+```sh
+helm upgrade --install anteroom-policies ../../charts/kyverno-policies -n kyverno \
+  --set admin.networkPolicy.enabled=true
 ```
 
-It is deliberately not one of the generated resources, because its failure
-mode is CNI-dependent: kubelet probe traffic is exempted by some network
-plugins (Cilium, Calico in default configurations) and blocked by others, and
-a blocked probe kills healthy pods. Verify probes survive on *your* CNI before
-adopting it, and note it needs a CNI that enforces NetworkPolicy at all.
+which generates one NetworkPolicy per opted-in namespace, selecting the same
+pods the injection policy selects and admitting TCP 8080 and nothing else.
+Ingress only — naming Egress would take DNS out from under every gated pod.
+The switch lives under `admin.` because fencing an exposed `/metrics` is the
+job it was added for, but it needs no `admin.expose`: a NetworkPolicy is
+deny-by-default for the pods it selects, so the same object closes the side
+door whether or not the admin listener is on the pod network.
+
+**It is off by default, and on kind it cannot be demonstrated at all.** This
+is the one resource in the chart whose failure mode is invisible in the object
+it creates, in two different directions:
+
+- kind's default CNI, `kindnetd`, does not implement NetworkPolicy. The object
+  applies without error, `kubectl get networkpolicy` shows it, and the ungated
+  port-forward at `localhost:3000` keeps working — because nothing is
+  enforcing it. That is why the demo script leaves it off: a demo that appears
+  to fence and does not is worse than one that admits the gap.
+- Where a CNI *does* enforce it, whether kubelet probe traffic is exempt is a
+  per-plugin, per-configuration answer. The app container's probes target
+  `:3000`, precisely the port this fences, so on a plugin that does not exempt
+  node-sourced traffic this policy kills healthy pods. Admit the node CIDR
+  through `admin.networkPolicy.extraIngress` — the chart README's
+  ["Closing the side door"](../../charts/kyverno-policies/README.md#closing-the-side-door)
+  has the worked example.
+
+So: try it on a cluster with Calico or Cilium, verify from a pod that should be
+refused rather than trusting the object, and check that pods stay Ready.
+
+```sh
+# On kind this returns hello-app's HTML whether or not the policy exists,
+# which is the point being made above.
+kubectl -n hello run probe --rm -it --restart=Never --image=curlimages/curl \
+  -- -sS --max-time 5 "http://$(kubectl -n hello get pod -l app=hello-app \
+     -o jsonpath='{.items[0].status.podIP}'):3000/" | head -1
+# a timeout is the pass; a 200 means nothing is enforcing the fence
+```
 
 **Trap 1 (no secure context) applies with full force.** The puzzle needs
 WebCrypto and renewal needs a service worker; both require HTTPS or
@@ -308,10 +335,60 @@ no rollout.
 
 ## Removing it
 
-Remove the three labels and roll the workloads; pods come back without the
-sidecar and the Service reverts on its next apply. Visitors holding a renewal
-service worker retire it themselves once the gate's endpoints stop answering;
-`/.anteroom/uninstall` does it immediately. Deleting the ClusterPolicies with
-the labels still in place also works — Kyverno mutates only at admission, so
-nothing changes until the next rollout, which then comes up ungated **while
-the Service still targets port `anteroom`**; remove the Service label first.
+Remove the three labels and roll the workloads:
+
+```sh
+kubectl -n hello label svc hello-app anteroom.radiustech.xyz/proxied-
+kubectl -n hello patch deploy hello-app --type=json -p='[
+  {"op": "remove", "path": "/spec/template/metadata/labels/anteroom.radiustech.xyz~1inject"},
+  {"op": "remove", "path": "/spec/template/metadata/annotations/anteroom.radiustech.xyz~1upstream-port"}
+]'
+kubectl label namespace hello anteroom.radiustech.xyz/inject-
+```
+
+Most of the cleanup is Kyverno's, and it is worth knowing which parts:
+
+- **The Service reverts on the same request that removes the label.** Its
+  original `spec.ports` were recorded in the annotation
+  `anteroom.radiustech.xyz/original-ports` when they were first rewritten, so
+  the restore rule has something to put back — which matters because a
+  mutation is *stored*, not overlaid, and without the record nothing could
+  reconstruct a `targetPort` that admission overwrote.
+- **The namespace's generated resources are deleted** when its label goes: the
+  ConfigMap, the cloned Secret, and the NetworkPolicy if you enabled it.
+  Kyverno's synchronized generate rules watch their trigger, and a trigger
+  that stops matching is treated like a deleted one.
+- **The sidecar needs the rollout.** A pod's container list is immutable after
+  admission, so no policy can take the gate out of a running pod. The
+  Deployment patch above is enough to make the next pods come up ungated;
+  `kubectl -n hello rollout restart deploy/hello-app` is what makes it now.
+
+Visitors holding a renewal service worker retire it themselves once the gate's
+endpoints stop answering; `/.anteroom/uninstall` does it immediately.
+
+**Order matters in one place.** Deleting the ClusterPolicies while Services
+still carry `proxied: enabled` leaves them targeting the port name `anteroom`
+with no rule left to revert them, and the next ungated rollout blackholes.
+Remove the Service label first, while the restore rule still exists. The chart
+README's [table of what cleans itself up](../../charts/kyverno-policies/README.md#opting-out-and-what-cleans-itself-up)
+covers the rest, including the asymmetry at uninstall: `helm uninstall` deletes
+the generated ConfigMaps and NetworkPolicies in every namespace and leaves the
+cloned Secrets behind.
+
+## Finding what still needs a rollout
+
+The `audit-anteroom-drift` policy exists for the one state that looks like
+nothing: a pod carrying `inject: enabled` with no gate container, which happens
+when it was admitted while the injection policy was not running — the chart not
+yet installed, Kyverno's webhook down. From outside it is indistinguishable
+from the app being down, and a Service already rewritten to `anteroom` cannot
+reach it at all. It is Audit only, so it reports rather than refuses:
+
+```sh
+kubectl -n hello get policyreport -o wide
+kubectl -n hello describe policyreport | grep -A 5 audit-anteroom-drift
+```
+
+A `fail` there names a pod to roll. Try it by uninstalling the policies chart,
+rolling the workload, and looking again — the pods come back ungated and the
+report says so.

@@ -158,7 +158,11 @@ Port-forwards are up (Ctrl-C stops them; the cluster stays):
 
   upstream service (ungated)  http://localhost:$APP_PORT
       hello-app directly, bypassing the gate — what the cluster-internal
-      side door looks like, and why the README suggests a NetworkPolicy.
+      side door looks like. The chart can fence it with
+      --set admin.networkPolicy.enabled=true, which this script deliberately
+      leaves off: kind's default CNI does not implement NetworkPolicy, so
+      the fence would apply cleanly, appear installed, and enforce nothing.
+      See the README's "The side door, and the two traps".
 
 Try:
   curl -si http://localhost:$GATE_PORT/ | head -1      # 401: the gate answers

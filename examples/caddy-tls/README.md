@@ -212,7 +212,7 @@ docker compose ps
 # `caddy` has host ports; `anteroom` and `app` must have none.
 
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/
-# 401 — correct. curl is not a browser navigation, so it gets the refusal.
+# 403 — correct. curl is not a browser navigation, so it gets the refusal.
 # A 200 here means the gate is being bypassed and the site is ungated.
 
 curl -s http://localhost:8080/robots.txt          # 200: bypassed
@@ -237,10 +237,10 @@ dot-segments itself, so `/.well-known/../admin` matching a `/.well-known/*`
 bypass here and being served as `/admin` there is a real bypass, and the gate
 closes it by refusing.
 
-`401` means something in front collapsed the path to `/x` first. That specific
+`403` means something in front collapsed the path to `/x` first. That specific
 hole is then closed by the normalizer instead — but the gate is no longer
 inspecting what the client sent, so its guarantee (*what I checked is what the
-upstream receives*) rests on two normalizers agreeing forever. If you get `401`,
+upstream receives*) rests on two normalizers agreeing forever. If you get `403`,
 look for a `rewrite`, `uri`, or `handle_path` directive in the Caddyfile, or a
 CDN normalizing ahead of it;
 [`../../docs/nginx.md`](../../docs/nginx.md#the-trailing-slash) has the full

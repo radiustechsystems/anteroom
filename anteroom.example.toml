@@ -241,17 +241,26 @@ paid_ttl  = "1h"
 [bypass]
 paths    = ["/robots.txt", "/sitemap.xml", "/feed.xml", "/.well-known/*"]
 cidrs    = []                         # always-allowed ranges (offices, monitors)
+# Explicit crawler identities that may bypass proof of work after address
+# verification. Published ranges are embedded for Googlebot, Bingbot, and
+# CCBot; all four use forward-confirmed reverse DNS as documented by their
+# operators. Ordinary traffic never causes a DNS lookup. A verified crawler is
+# passed through on every route; it is never asked to solve or pay. Available:
+# googlebot, bingbot, yandexbot, ccbot.
+verified_crawlers = ["googlebot", "bingbot", "yandexbot", "ccbot"]
 
 # ---------------------------------------------------------------------------
 # Triage: how non-browser clients receive the payment offer.
 # Default: 402 status + PAYMENT-REQUIRED header + markdown body.
 # ---------------------------------------------------------------------------
 [triage]
-json_accept    = true             # Accept: application/json → JSON 402 body
-ok_body_agents = ["claude-user"]  # user agents of fetch tools that discard non-2xx
-                                  # bodies (measured); these receive the markdown
-                                  # with status 200, the only status they surface.
-                                  # Matched case-insensitively as a UA substring.
+json_accept           = true             # Accept: application/json → JSON 402 body
+ok_body_agents        = ["claude-user"]  # case-insensitive UA substrings for CLI
+                                         # agents that discard non-2xx bodies
+# This defaults true and bypasses proof-of-work AND x402, including paid routes,
+# for source-verified vendor-hosted fetchers. They cannot complete either
+# protocol. Set false to return a strict 403 to them instead.
+allow_hosted_fetchers = true             # Claude-User, ChatGPT-User, Google-Agent
 
 # The binary also serves /.anteroom/healthz (liveness), /.anteroom/renew.js (the
 # injected renewal script) and /.anteroom/uninstall (removes the renewal service

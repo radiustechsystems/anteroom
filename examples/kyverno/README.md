@@ -136,7 +136,7 @@ kubectl -n hello get configmap anteroom-config secret anteroom
 # pass gets the machine-readable refusal, not hello-app's HTML.
 kubectl -n hello run probe --rm -it --restart=Never --image=curlimages/curl \
   -- -si http://hello-app.hello.svc/ | head -1
-# HTTP/1.1 401 Unauthorized
+# HTTP/1.1 403 Forbidden
 ```
 
 Then see it as a visitor — the script's port-forward is already running, or
@@ -190,19 +190,68 @@ too much sharing if namespaces are your isolation boundary. In that case drop
 the clone rule and create per-namespace Secrets by hand — injection only
 requires a Secret named `anteroom` with key `hmac-key`.
 
-**The admin listener stays on the pod's loopback.** The generated config sets
-`admin_listen = "127.0.0.1:8090"`, so `/metrics`, `/stats`, and `/healthz`
-exist but nothing on the cluster network can reach them — the listener is
-unauthenticated, and reachability is its only access control. `kubectl
-port-forward` still works because it dials localhost inside the pod's own
-network namespace, which is exactly the seam the script's metrics forward
-uses. An in-cluster Prometheus needs the listener widened to `":8090"` in the
-generated TOML — a deliberate trade, made in the one file the fleet shares,
-knowing metrics reveal traffic volumes.
+**The admin listener stays on the pod's loopback by default.** The generated
+config sets `admin_listen = "127.0.0.1:8090"`, so `/metrics`, `/stats`, and
+`/healthz` exist but nothing on the cluster network can reach them — the
+listener is unauthenticated, and reachability is its only access control.
+`kubectl port-forward` still works because it dials localhost inside the
+pod's own network namespace, which is exactly the seam the script's metrics
+forward uses. Widening it is one chart value, and the next section is about
+what that costs.
 
 **Probes keep working, and that is not a bypass hole.** The kubelet dials the
 app's `containerPort` from inside the node, never through the Service, so app
 probes need no `[bypass]` entry and the gate never sees them.
+
+## Scraping the whole fleet
+
+`kubectl port-forward` reaches one pod's metrics, which is the right tool for
+debugging one pod and useless for the question a cluster actually raises:
+what is the fleet doing, and is one replica behaving differently from its
+siblings. Two chart values answer it:
+
+```sh
+helm upgrade --install anteroom-policies ../../charts/kyverno-policies -n kyverno \
+  --set admin.expose=true \
+  --set admin.networkPolicy.enabled=true
+kubectl -n hello rollout restart deploy/hello-app   # the env var lands at admission
+```
+
+`admin.expose` sets `ANTEROOM_ADMIN_LISTEN=":8090"` on the injected sidecar —
+an environment variable beats the mounted TOML, which is why `gateConfig`
+keeps its loopback default and stays safe to override wholesale — and adds a
+container port named `anteroom-admin`. The name is the same trick the traffic
+port plays for the Service policy: a scraper resolves the name and never
+needs to know the number, and a gate that does *not* carry the port is
+visibly one whose operator did not opt into being scraped.
+
+Anything that speaks Prometheus can then discover the pods by the label the
+injection policy already keys on. So can
+[anteroom-stats](https://github.com/radiustechsystems/anteroom-stats), whose
+Kubernetes mode is built for exactly this shape — it lists pods matching
+`anteroom.radiustech.xyz/inject=enabled`, polls each one's `/stats`, and
+charts either the fleet as one number or any single replica on its own:
+
+```sh
+STATS_MODE=kubernetes
+KUBE_LABEL_SELECTOR=anteroom.radiustech.xyz/inject=enabled
+```
+
+**What this costs.** The listener is unauthenticated by design, and it
+reports traffic volumes and — wherever `gateConfig` grows an `[activity]`
+section — visitor IP addresses. On loopback that does not matter; on the pod
+network it means every pod in the cluster can read both. That is what
+`admin.networkPolicy.enabled` is for: it generates a NetworkPolicy into each
+opted-in namespace admitting `:8090` only from the collector's pods.
+
+Read that value's description before enabling it. A NetworkPolicy is
+deny-by-default for the pods it selects, so the generated one decides *all*
+ingress to gated pods, not just the admin port. Two consequences: it closes
+the side door below — deliberately, and admit anything you still need through
+`admin.networkPolicy.extraIngress` — and on CNIs that do not exempt kubelet
+probe traffic it blocks the probes, which kills healthy pods. Verify probes
+survive on your CNI first; the warning under the side door applies here with
+the same force, because it is the same mechanism.
 
 ## The side door, and the two traps
 
@@ -214,12 +263,16 @@ cluster. The fence is a chart value:
 
 ```sh
 helm upgrade --install anteroom-policies ../../charts/kyverno-policies -n kyverno \
-  --set policies.networkPolicy=true
+  --set admin.networkPolicy.enabled=true
 ```
 
 which generates one NetworkPolicy per opted-in namespace, selecting the same
 pods the injection policy selects and admitting TCP 8080 and nothing else.
 Ingress only — naming Egress would take DNS out from under every gated pod.
+The switch lives under `admin.` because fencing an exposed `/metrics` is the
+job it was added for, but it needs no `admin.expose`: a NetworkPolicy is
+deny-by-default for the pods it selects, so the same object closes the side
+door whether or not the admin listener is on the pod network.
 
 **It is off by default, and on kind it cannot be demonstrated at all.** This
 is the one resource in the chart whose failure mode is invisible in the object
@@ -234,7 +287,7 @@ it creates, in two different directions:
   per-plugin, per-configuration answer. The app container's probes target
   `:3000`, precisely the port this fences, so on a plugin that does not exempt
   node-sourced traffic this policy kills healthy pods. Admit the node CIDR
-  through `networkPolicy.extraIngress` — the chart README's
+  through `admin.networkPolicy.extraIngress` — the chart README's
   ["Closing the side door"](../../charts/kyverno-policies/README.md#closing-the-side-door)
   has the worked example.
 

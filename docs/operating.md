@@ -34,7 +34,7 @@ until you configure around it.
    **What went wrong.** A worker with a catch-all `fetch` handler that re-issues
    requests (`e.respondWith(fetch(e.request))`) causes the browser to rewrite the
    navigation's fetch metadata. Anteroom read that metadata literally, concluded
-   the request was machine traffic, and served the `401` refusal — which carries
+   the request was machine traffic, and served the `403` refusal — which carries
    no solver, so the visitor could never earn a pass. Permanent, silent, and only
    on Firefox, so a developer testing in Chromium saw nothing wrong.
 
@@ -88,9 +88,9 @@ until you configure around it.
    load-bearing, because getting it wrong is not recoverable by the visitor.
 
    A browser re-fetches a worker's script to check for updates. If that path is
-   gated, a visitor without a pass gets `401` — and a failed update check does
+   gated, a visitor without a pass gets `403` — and a failed update check does
    **not** drop the registration. Measured in both Chromium and Firefox: a
-   registration survives a `401` on its script, and survives a `404` too. So a
+   registration survives a `403` on its script, and survives a `404` too. So a
    worker installed once keeps running, and you cannot ship it a fix to anyone
    whose pass has lapsed.
 
@@ -240,6 +240,14 @@ Anything that is not a browser navigation gets a machine-readable refusal rather
 than the wait page. That is correct for scrapers and wrong for several things you
 probably run. Each of these needs a `bypass` rule.
 
+Both the wait page and machine refusal use `403`: browsers still render the
+interstitial, while clients, caches, and crawlers cannot mistake it for the
+requested resource. Every such response is also marked `Cache-Control: no-store`
+and `X-Anteroom-Action: challenge`. Temporary crawler-DNS failures instead use
+`X-Anteroom-Action: crawler-verification-unavailable` with `503` and
+`Retry-After`; clients can distinguish retryable verification failure from a
+challenge without parsing the body.
+
 | What breaks | Why | Fix |
 |---|---|---|
 | **Inbound webhooks** (Stripe, GitHub, Slack) | A POST is not a browser navigation, so it is refused; the sender sees an error and the body is gone | `bypass.paths = ["/webhooks/*"]`, plus `bypass.cidrs` where the sender publishes ranges |
@@ -247,7 +255,7 @@ probably run. Each of these needs a `bypass` rule.
 | **Form POSTs after a pass lapses** | The POST is refused and the reload loses the body | raise `pass_ttl`; bypass POST-heavy paths |
 | **API clients, CLI tools, curl** | Refused at every endpoint | bypass `/api/*`, have the client solve the challenge (the refusal body explains how), or enable the experimental x402 admission door |
 | **RSS/Atom readers** | `Accept: */*`, so refused | bypass your feed paths (the example config covers `/feed.xml` only) |
-| **Link previews** (Slack, Discord, X, Facebook) | They get the wait page HTML and do not run JS, so the preview reads "Pardon us for a moment" — and unfurl caches keep it for days | put Open Graph tags in your `header.html`, or bypass only dedicated preview paths/CIDRs you can authenticate; Anteroom has no crawler-identity verifier |
+| **Link previews** (Slack, Discord, X, Facebook) | Browser-shaped unfurlers get the wait page HTML and do not run JS, so the preview reads "Pardon us for a moment" — and unfurl caches keep it for days | put Open Graph tags in your `header.html`, or bypass only dedicated preview paths/CIDRs you can authenticate |
 | **Third-party iframe embeds, oEmbed** | `SameSite=Lax` and storage partitioning withhold the pass inside a frame; the wall reloads forever | bypass the embeddable paths |
 | **Multi-subdomain fleets** | The pass cookie is host-only, so each hostname needs its own solve | accept it, or bypass shared asset hosts |
 | **Private browsing without service workers** | Registration fails, so the pass is not renewed | raise `pass_ttl` |
@@ -262,6 +270,60 @@ than Anteroom. Requests that are unambiguously preflights (`OPTIONS`, with both
 application can answer with its own policy. The request the preflight is asking
 about is a separate request and is gated normally, so a cross-origin fetch still
 needs a pass; a bare `OPTIONS` is content and is still challenged.
+
+### Verified crawler bypass
+
+`bypass.verified_crawlers` explicitly selects crawler identities allowed through
+the gate: `googlebot`, `bingbot`, `yandexbot`, and `ccbot`. An operator-advertised
+User-Agent product token is only a claim. Only tokens belonging to explicitly
+configured providers trigger address verification, so ordinary traffic and
+unconfigured crawlers stay on the normal challenge/payment ladder without DNS.
+
+Googlebot, Bingbot, and CCBot use embedded snapshots of their operators'
+published ranges as a fast path. Snapshot misses use the operator's documented
+forward-confirmed reverse-DNS procedure. Yandex publishes no stable range list,
+so it always uses forward-confirmed reverse DNS. Definitive positive and
+negative results are cached for four hours in a shared, bounded 8,192-entry
+cache; IPv6 negatives are coalesced by `/64` to resist address-rotation churn.
+Temporary DNS failures return `503` with `Retry-After`; they are not cached.
+
+Verified crawlers bypass proof of work and x402 on every route. An unverified
+crawler claim receives the ordinary machine-readable `403`, never a payment
+offer. Correct `trusted_proxies` configuration is essential because crawler
+verification uses the same resolved client address as CIDR bypasses. If that
+address cannot be resolved, the request follows the ordinary ladder rather than
+being reported to the crawler as a permanent DNS outage.
+
+Claimed-but-unverified machine identities always receive a strict `403`; the
+`ok_body_agents` compatibility downgrade cannot turn a spoof into a 200.
+
+Refresh the embedded snapshots with `scripts/update-published-ips.py`. The
+scheduled workflow reports a semantic range change for human review rather
+than committing generated data automatically.
+
+### Hosted user-triggered fetchers
+
+`Claude-User/`, `ChatGPT-User/`, and `Google-Agent;` identify fetches made on a
+user's behalf by vendor-hosted tools. They are not command-line agents and
+cannot complete proof of work or x402. Anteroom checks the advertised
+case-sensitive User-Agent token, then requires the source address to appear in
+that vendor's embedded published ranges. A verified request passes through by
+default, including on x402-paid routes; an unverified claim receives a
+machine-readable `403`, never a payment offer. This authenticates vendor
+infrastructure, not application authorization.
+
+If the client address cannot be resolved, Anteroom warns once and sends the
+request through the ordinary ladder rather than labeling it a spoof or telling
+the vendor the site is temporarily unavailable forever.
+
+Claude uses the union of `claude.com/crawling/bots.json` and Anthropic's stable
+outbound `160.79.104.0/21`. This authenticates Anthropic infrastructure, not a
+human or a particular Claude product. Claude Code's different
+`Claude-User (claude-code/...)` form remains on the ordinary agent path and can
+receive x402. `triage.allow_hosted_fetchers` defaults to `true` because these
+hosted clients cannot complete either PoW or x402. Set it to `false` to remove
+the free exception: verified hosted fetchers then receive a strict `403` rather
+than falling through to a payment offer they cannot use.
 
 Percent-encoding is *not* restricted: `/repos/owner%2Frepo`, `/file%20name.txt`,
 and friends pass through untouched. Only paths whose decoded form is
@@ -291,9 +353,10 @@ non-interference test for every case where injection is declined.
 untouched:
 
 - the request looks like a document navigation (`Sec-Fetch-Dest: document`, or a
-  GET whose `Accept` contains `text/html`) **and** carries no `HX-Request`,
-  `X-Requested-With`, `Turbo-Frame`, or `Turbo-Request-ID` header — this alone
-  excludes HTMX/Turbo fragments and JSON mislabelled as `text/html`;
+  GET whose `Accept` contains `text/html`) and carries no `HX-Request`,
+  `Turbo-Frame`, or `Turbo-Request-ID`; `X-Requested-With` excludes it only when
+  its value is `XMLHttpRequest` because Android WebViews put application package
+  names there;
 - the status is exactly `200` (never 206, 304, 3xx, 4xx, 5xx — a 304 has no body
   and a 206 is a byte range);
 - `Content-Type` is `text/html` with an ASCII-compatible charset; never
@@ -399,7 +462,10 @@ keeps settlement retry separate from replaying an upstream mutation.
 ## Watching what the gate decides
 
 `anteroom -v` logs one line per request naming the rung of the ladder that
-answered it — `own-endpoint`, `bypass-path`, `bypass-ip`, `pass-pow`, `pass-paid`,
+answered it — `own-endpoint`, `bypass-path`, `bypass-ip`, `bypass-crawler`,
+`crawler-verification-unavailable`, `crawler-unverified`, `bypass-hosted`,
+`hosted-refusal`, `hosted-unverified`,
+`pass-pow`, `pass-paid`,
 `wait-page`, `refusal`, `non-canonical-path` — with the status, response size, and
 duration:
 
@@ -453,6 +519,8 @@ described below — no per-visitor state. Nothing is ever pushed anywhere.
 | `anteroom_challenge_solve_duration_seconds` | histogram of issue-to-successful-answer time, by kind |
 | `anteroom_passes_minted_total{kind=…}` | passes minted: `pow` vs `paid` |
 | `anteroom_upstream_errors_total` | proxy round trips that failed to reach the upstream (visitors saw 502) |
+| `anteroom_crawler_dns_lookups_total{outcome=…}` | forward-confirmed crawler lookups split into `verified`, `unverified`, and temporary `indeterminate` results |
+| `anteroom_crawler_dns_cache_hits_total`, `anteroom_crawler_dns_saturated_total`, `anteroom_crawler_dns_in_flight` | aggregate cache use, concurrency pressure, and current DNS work; no provider or address labels |
 | `anteroom_challenge_bytes_total` | response body bytes the gate authored itself: wait pages, the solver, challenge and payment negotiation, refusals, error responses |
 | `anteroom_upstream_bytes_total` | response body bytes proxied from the upstream — the real traffic |
 | `anteroom_http_bytes_total` | all response body bytes served, always the sum of the two above; headers and post-upgrade (WebSocket) traffic are not counted |

@@ -1,7 +1,9 @@
 # Releasing Anteroom
 
-The gate ships as a container image on GitHub Container Registry. A release is an
-annotated git tag pushed to this repository; everything after that is
+The gate ships two ways: a container image on GitHub Container Registry, and a
+static binary for each supported platform attached to the GitHub Release. Both
+come out of the same tag. A release is an annotated git tag pushed to this
+repository; everything after that is
 [`.github/workflows/release.yaml`](../.github/workflows/release.yaml).
 
 ```sh
@@ -52,10 +54,48 @@ config path, the state directory, the UID, the exposed port.
 Post-1.0 the same list moves under the major number and the rules become the
 ordinary ones.
 
-## What gets published, and which tags move
+## What gets published
 
-One tag push produces one multi-arch image (`linux/amd64`, `linux/arm64`) and
-several names for it:
+One tag push produces two things: the multi-arch image, and a set of binaries on
+the Release page.
+
+### Binaries
+
+| Platform | Asset |
+|---|---|
+| Linux x86-64 | `anteroom_<tag>_linux_amd64.tar.gz` |
+| Linux ARM64 | `anteroom_<tag>_linux_arm64.tar.gz` |
+| Linux ARMv7 | `anteroom_<tag>_linux_armv7.tar.gz` |
+| macOS Intel | `anteroom_<tag>_darwin_amd64.tar.gz` |
+| macOS Apple silicon | `anteroom_<tag>_darwin_arm64.tar.gz` |
+| Windows x86-64 | `anteroom_<tag>_windows_amd64.zip` |
+| FreeBSD x86-64 | `anteroom_<tag>_freebsd_amd64.tar.gz` |
+
+Plus `SHA256SUMS` and the two files that verify it, `SHA256SUMS.sig` and
+`SHA256SUMS.pem`.
+
+Each archive holds the `anteroom` executable, `anteroom.example.toml` to copy
+and edit, the README, and the licences. The binaries are built `CGO_ENABLED=0`,
+so there is nothing to install alongside them and nothing to match against the
+host's libc — the same property that lets the image sit on a distroless base.
+
+They are stamped exactly as the image is: `anteroom_build_info` on `/metrics`
+reports the tag and the full commit, so a binary someone downloaded eight months
+ago can still say what it is.
+
+The platform list lives in the `Makefile` as `DIST_PLATFORMS`, and the release
+workflow builds it by running `make dist` rather than by keeping its own copy.
+To add a platform, add it there — and `make dist` locally produces the same
+archives the release does, named after `git describe` instead of a tag.
+
+ARMv7 is listed explicitly because `GOARCH=arm` alone means ARMv6: the archive
+is built with `GOARM=7`, which is what a Raspberry Pi 2 or later, and every ARM
+board of the last decade, actually wants.
+
+### Image tags, and which ones move
+
+The image is one multi-arch manifest (`linux/amd64`, `linux/arm64`) under
+several names:
 
 | Git tag | Image tags |
 |---|---|
@@ -143,9 +183,15 @@ grades the image, which is the part a dry run was checking.
    architectures, pushes, signs,
    attaches an SBOM and provenance, then **pulls the published image back and
    starts it** — the last step grades the bytes a user gets rather than the ones
-   the runner built.
-4. The Release page is created with a generated changelog, the pull command, and
-   the digest.
+   the runner built. Alongside that it cross-compiles every platform in
+   `DIST_PLATFORMS`, checksums the archives, and signs the checksum file.
+4. The Release page is created with a generated changelog, the pull command, the
+   digest, and the binaries attached.
+
+Re-running the workflow on a tag that already has a Release is safe: the notes
+are left alone — they may have been edited by hand — and the assets are
+re-uploaded with `--clobber`, which is what repairs a Release that was created
+before its binaries were attached.
 
 A release that goes wrong is fixed forward: cut the next patch. Deleting a
 published version is possible from the package settings, but anything that
@@ -155,16 +201,36 @@ a good idea.
 
 ## Verifying what you pulled
 
-The image is signed keylessly, so there is no signing key anywhere to leak: the
-signature is bound to the release workflow's identity in the repository that ran
-it — which is why the identity below is a repository path and has to match the
-one that cut the release.
+Image and binaries are both signed keylessly, so there is no signing key
+anywhere to leak: the signature is bound to the release workflow's identity in
+the repository that ran it — which is why the identity below is a repository
+path and has to match the one that cut the release.
 
 ```sh
 cosign verify ghcr.io/radiustechsystems/anteroom:0.4.0 \
   --certificate-identity-regexp '^https://github.com/radiustechsystems/anteroom/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+For a downloaded binary it is two steps, because the signature covers the
+checksum file rather than each archive: check the archive against `SHA256SUMS`,
+then check `SHA256SUMS` against its signature. One signature covers every asset
+the file lists.
+
+```sh
+# with the archives, SHA256SUMS, SHA256SUMS.sig and SHA256SUMS.pem downloaded
+sha256sum --check --ignore-missing SHA256SUMS
+cosign verify-blob SHA256SUMS \
+  --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp '^https://github.com/radiustechsystems/anteroom/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`--ignore-missing` is what lets that work when you downloaded one archive rather
+than all seven; without it `sha256sum` fails on the six it cannot find. Do both
+steps or neither — a checksum you fetched from the same page as the file proves
+only that the download was not corrupted in transit, and it is the signature
+that says who built it.
 
 The SBOM and provenance travel with the image:
 
@@ -188,6 +254,12 @@ anteroom_build_info{version="v0.4.0",revision="<full commit>",…} 1
 the commit it was built from. An image built without those build args reports
 `version="(devel)"`, which is the truth about it. `make image` passes them from
 `git describe`, so a local image says `-dirty` when the tree was.
+
+Published binaries answer the same question the same way — `make dist` puts the
+two values in via `-ldflags -X`, and the workflow hands it the tag and the
+commit — so a downloaded `anteroom` is as identifiable as a pulled image. A
+`go build ./cmd/anteroom` from a checkout is not: the toolchain has no tag to
+read and reports `(devel)`.
 
 ---
 

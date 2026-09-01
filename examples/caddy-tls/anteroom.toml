@@ -102,7 +102,7 @@ cidrs = []           # usable here — unlike a gate with a published port — b
 
 # /sw.js is the one that looks skippable and is not. A browser re-fetches a
 # worker's script to check for updates, and a failed update check does not drop
-# the registration — measured on a 401 and on a 404, in both Chromium and
+# the registration — measured on a 403 and on a 404, in both Chromium and
 # Firefox. Gate that path and a visitor whose pass has lapsed keeps running the
 # old worker forever and you cannot ship them a fix.
 #
@@ -115,6 +115,6 @@ cidrs = []           # usable here — unlike a gate with a published port — b
 # whether a machine client can read the instructions for getting through, and a
 # refusal nobody reads is a gate nobody can pass.
 [triage]
-json_accept    = true             # Accept: application/json → the 401 refusal as JSON
+json_accept    = true             # Accept: application/json → the 403 refusal as JSON
 ok_body_agents = ["claude-user"]  # fetch tools measured to discard non-2xx bodies get
                                   # the markdown with status 200, the only status they surface

@@ -197,14 +197,11 @@ func TestT1_2_MachineRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status %d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status %d, want 403", resp.StatusCode)
 	}
-	if got := resp.Header.Get("WWW-Authenticate"); !strings.HasPrefix(got, "Anteroom ") {
-		// The scheme token must stay "Anteroom": at least one popular agent
-		// skill reads `WWW-Authenticate: Payment …` as a different payment
-		// protocol entirely and would route agents into the wrong rail.
-		t.Errorf("WWW-Authenticate = %q, want an Anteroom challenge", got)
+	if got := resp.Header.Get("X-Anteroom-Action"); got != "challenge" {
+		t.Errorf("X-Anteroom-Action = %q, want challenge", got)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/markdown") {
 		t.Errorf("Content-Type %q, want text/markdown", ct)
@@ -224,8 +221,8 @@ func TestT1_3_JSONRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status %d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status %d, want 403", resp.StatusCode)
 	}
 	var doc struct {
 		Error         string `json:"error"`
@@ -286,11 +283,14 @@ func TestT1_5_WaitPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status %d, want 403", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type %q, want text/html", ct)
+	}
+	if got := resp.Header.Get("X-Anteroom-Action"); got != "challenge" {
+		t.Errorf("X-Anteroom-Action = %q, want challenge", got)
 	}
 	page := string(body)
 	for _, want := range []string{"anteroom-status", "__ANTEROOM__", "Pardon us"} {
@@ -1214,8 +1214,8 @@ func TestT1_50_UnbypassedWebhookIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status %d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status %d, want 403", resp.StatusCode)
 	}
 	if !strings.Contains(string(body), harness.PathChallenge) {
 		t.Error("the refusal does not explain how to get past it")
@@ -1234,8 +1234,8 @@ func TestT1_53_APIClientCanSolveItsWayIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status %d before solving, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d before solving, want 403", resp.StatusCode)
 	}
 	if _, err := c.Solve(ctx); err != nil {
 		t.Fatalf("solve: %v", err)

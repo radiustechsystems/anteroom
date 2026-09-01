@@ -159,7 +159,7 @@ counts() {
 }
 
 SVC=clusterpolicy-route-service.yaml
-NP=clusterpolicy-generate-networkpolicy.yaml
+NP=clusterpolicy-generate-config.yaml
 AUDIT=clusterpolicy-audit-drift.yaml
 
 echo "Service rewrite and its reverse:"
@@ -206,19 +206,21 @@ echo "NetworkPolicy fence:"
 
 generates "opted-in namespace gets the fence" \
   "$NP" namespace-opted-in.yaml networkpolicy.yaml \
-  --set policies.networkPolicy=true
+  --set admin.networkPolicy.enabled=true \
+  --set policies.generateConfig=false --set hmacSecret.clone=false
 
 # extraIngress is the probe escape hatch and the metrics escape hatch; if it
 # did not append cleanly, the advice in the README would be wrong.
 generates "extraIngress rules are appended" \
   "$NP" namespace-opted-in.yaml networkpolicy-extra-ingress.yaml \
-  --set policies.networkPolicy=true \
-  --set 'networkPolicy.extraIngress[0].from[0].ipBlock.cidr=10.0.0.0/16'
+  --set admin.networkPolicy.enabled=true \
+  --set policies.generateConfig=false --set hmacSecret.clone=false \
+  --set 'admin.networkPolicy.extraIngress[0].from[0].ipBlock.cidr=10.0.0.0/16'
 
 counts "namespace without the label gets nothing" \
   "$NP" namespace-plain.yaml \
   "pass: 0, fail: 0, warn: 0, error: 0, skip: 0" \
-  --set policies.networkPolicy=true
+  --set admin.networkPolicy.enabled=true
 
 echo
 echo "Drift audit:"

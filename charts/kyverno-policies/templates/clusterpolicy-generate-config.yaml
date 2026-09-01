@@ -14,7 +14,7 @@ Kyverno's background controller needs RBAC to manage what it generates —
 templates/rbac.yaml, on by default — or the policy is refused at apply time
 by Kyverno's policy-validation webhook, which names the missing permission.
 */ -}}
-{{- if or .Values.policies.generateConfig .Values.hmacSecret.clone }}
+{{- if or .Values.policies.generateConfig .Values.hmacSecret.clone .Values.admin.networkPolicy.enabled }}
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -98,5 +98,72 @@ spec:
         clone:
           namespace: {{ .Values.hmacSecret.sourceNamespace }}
           name: {{ .Values.hmacSecret.sourceName }}
+    {{- end }}
+    {{- if .Values.admin.networkPolicy.enabled }}
+    # Fence the exposed admin port. This rule exists only because
+    # admin.expose moves an unauthenticated listener onto the pod network;
+    # without it, every pod in the cluster can read traffic volumes and
+    # visitor IPs off every gate.
+    #
+    # A NetworkPolicy is deny-by-default for the pods it selects, so this
+    # rule decides ALL ingress to gated pods, not just the admin port. The
+    # gate's own 8080 is admitted from anywhere — that is the site. The
+    # application's port is not, which closes the side door on purpose
+    # (examples/kyverno/README.md, "The side door"); admit it back through
+    # admin.networkPolicy.extraIngress if something legitimately dials the
+    # app directly. Kubelet probes reach the app container from inside the
+    # node and are exempt on some CNIs and blocked by others — verify on
+    # yours, because a blocked probe kills healthy pods.
+    - name: generate-admin-networkpolicy
+      match:
+        any:
+          - resources:
+              kinds: [Namespace]
+              selector:
+                matchLabels:
+                  anteroom.radiustech.xyz/inject: enabled
+      generate:
+        generateExisting: true
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: anteroom-admin
+        namespace: {{ `"{{ request.object.metadata.name }}"` }}
+        # And the opt-out path: removing the namespace label makes the trigger
+        # stop matching, which deletes the fence along with the ConfigMap. A
+        # namespace that stops being gated does not keep a policy fencing it.
+        synchronize: true
+        {{- if .Values.orphanDownstreamOnPolicyDelete }}
+        orphanDownstreamOnPolicyDelete: true
+        {{- end }}
+        data:
+          spec:
+            podSelector:
+              matchLabels:
+                anteroom.radiustech.xyz/inject: enabled
+            policyTypes: [Ingress]
+            ingress:
+              # The site. Numeric because NetworkPolicy resolves port names
+              # against the pod's containers only on clusters with the
+              # feature enabled, and 8080 is what the injection policy always
+              # sets.
+              - ports:
+                  - port: {{ include "kyverno-policies.gatePort" . | int }}
+                    protocol: TCP
+              # The operator listener, collector only.
+              - ports:
+                  - port: {{ .Values.admin.port }}
+                    protocol: TCP
+                from:
+                  - podSelector:
+                      matchLabels:
+                        {{- toYaml .Values.admin.networkPolicy.collectorSelector | nindent 24 }}
+                    {{- with .Values.admin.networkPolicy.collectorNamespaceSelector }}
+                    namespaceSelector:
+                      matchLabels:
+                        {{- toYaml . | nindent 24 }}
+                    {{- end }}
+              {{- with .Values.admin.networkPolicy.extraIngress }}
+              {{- toYaml . | nindent 14 }}
+              {{- end }}
     {{- end }}
 {{- end }}

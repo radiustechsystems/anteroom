@@ -4,33 +4,6 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/metrics"
 )
 
-// decisions is every string serve can return — the same vocabulary as the
-// `anteroom -v` log and docs/operating.md. Pre-registered so the request path
-// never allocates a series; a rung added without updating this list lands in
-// decision="unknown" rather than panicking or leaking cardinality.
-var decisions = []string{
-	"non-canonical-path",
-	"cors-preflight",
-	"own-endpoint",
-	"bypass-path",
-	"bypass-ip",
-	"pass-pow",
-	"pass-paid",
-	"payment-required",
-	"pay-malformed",
-	"pay-unidentified",
-	"pay-unoffered",
-	"pay-replay",
-	"pay-rate-limited",
-	"pay-pending",
-	"pay-grant-failed",
-	"pay-rejected",
-	"pay-ambiguous",
-	"pay-infra",
-	"wait-page",
-	"refusal",
-}
-
 // solveBuckets spans the observable solve range: renewals (difficulty 6) land
 // in the millisecond buckets, admissions at the default difficulty 14 around
 // 0.5-5s, and nothing past 60s exists to measure — the challenge window
@@ -72,7 +45,7 @@ func newGateMetrics() *gateMetrics {
 		registry: r,
 		requests: r.CounterVec("anteroom_http_requests_total",
 			"Requests handled, by the ladder rung that answered (the same vocabulary as `anteroom -v` and the docs).",
-			"decision", decisions...),
+			"decision", decisionLabels()...),
 		inFlight: r.Gauge("anteroom_http_requests_in_flight",
 			"Requests currently being handled, including long-lived streams."),
 		issued: r.CounterVec("anteroom_challenges_issued_total",
@@ -100,22 +73,11 @@ func newGateMetrics() *gateMetrics {
 	}
 }
 
-// upstreamDecisions are the ladder rungs whose response body came from the
-// upstream. Everything outside this set the gate wrote itself, so the two
-// byte counters partition every response and countBytes needs no third case.
-var upstreamDecisions = map[string]bool{
-	"bypass-path":    true,
-	"bypass-ip":      true,
-	"cors-preflight": true,
-	"pass-pow":       true,
-	"pass-paid":      true,
-}
-
 // countBytes attributes one finished request's response body to the side of
 // the split that produced it, and to the grand total.
-func (m *gateMetrics) countBytes(decision string, n uint64) {
+func (m *gateMetrics) countBytes(d decision, n uint64) {
 	m.bytesTotal.Add(n)
-	if upstreamDecisions[decision] {
+	if d.upstream() {
 		m.upstreamBytes.Add(n)
 	} else {
 		m.challengeBytes.Add(n)

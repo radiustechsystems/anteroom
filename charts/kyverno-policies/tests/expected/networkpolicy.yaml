@@ -2,17 +2,23 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
-    app.kubernetes.io/instance: anteroom-policies
     app.kubernetes.io/managed-by: kyverno
-    app.kubernetes.io/name: kyverno-policies
-    app.kubernetes.io/part-of: anteroom
-    app.kubernetes.io/version: latest
-  name: only-through-anteroom
+  name: anteroom-admin
   namespace: hello
 spec:
   ingress:
   - ports:
     - port: 8080
+      protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: anteroom-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: anteroom-stats
+    ports:
+    - port: 8090
       protocol: TCP
   podSelector:
     matchLabels:

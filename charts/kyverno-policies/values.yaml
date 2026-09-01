@@ -37,18 +37,6 @@ policies:
   # update already reached it for the rewrite rule. The rule short-circuits on
   # the missing annotation.
   restoreService: true
-  # -- Create the NetworkPolicy that admits only the gate's port to gated
-  # pods, so nothing on the cluster network can reach the application
-  # container directly on the pod IP. **Off by default and read this first:**
-  # a NetworkPolicy is the one resource here whose failure mode is invisible
-  # in the object it creates. On a CNI that does not implement NetworkPolicy
-  # (kind's default kindnetd among them) it applies cleanly and fences
-  # nothing. On a CNI that does, whether the kubelet's probe traffic is
-  # exempt is a per-plugin answer — and the application container's probes
-  # target the very port this fences, so where they are not exempt this kills
-  # healthy pods. Verify both on your own CNI, then turn it on; use
-  # `networkPolicy.extraIngress` for the probe case.
-  networkPolicy: false
   # -- Create the Audit-mode policy that reports pods carrying the inject
   # label but no gate container. That combination means a pod was admitted
   # while injection was off or broken, and it is worth a report because it is
@@ -78,29 +66,63 @@ sidecar:
     seccompProfile:
       type: RuntimeDefault
 
-networkPolicy:
-  # -- Name of the generated NetworkPolicy in each opted-in namespace.
-  name: only-through-anteroom
-  # -- Ingress rules appended verbatim to the generated NetworkPolicy, whose
-  # own rule admits nothing but TCP 8080. This is where the kubelet-probe
-  # problem gets solved on a CNI that does not exempt node traffic: name the
-  # node CIDR in an `ipBlock` and omit `ports`, since there is no portable
-  # "from the node" selector and the kubelet dials whatever port each workload
-  # uses. The same list is how an in-cluster Prometheus reaches a widened
-  # `admin_listen`, or how a mesh sidecar keeps a side channel. Every entry
-  # widens the fence, so each one deserves a comment saying why. See "Closing
-  # the side door" in this chart's README for the worked example.
-  extraIngress: []
-
 # -- Keep generated resources when the policy or the whole chart is removed.
-# Worth understanding before `helm uninstall`, because Kyverno's default is
-# not symmetric: the ConfigMap and the NetworkPolicy are generated from data
-# in the policy, so deleting the policy DELETES them in every namespace, while
-# the HMAC Secret is a clone and clones are retained. Set this to true and
-# the generated copies outlive the chart in every namespace — right when the
-# chart is being replaced or moved rather than withdrawn, and wrong if you
-# expect uninstall to leave nothing behind.
+# Worth understanding before `helm uninstall`, because Kyverno's default is not
+# symmetric: what the chart generates from data in the policy — the ConfigMap,
+# and the NetworkPolicy when `admin.networkPolicy.enabled` is on — is DELETED
+# in every namespace when the policy goes, while the HMAC Secret is a clone and
+# clones are retained. Set this to true and the generated copies outlive the
+# chart in every namespace — right when the chart is being replaced or moved
+# rather than withdrawn, and wrong if you expect uninstall to leave nothing
+# behind.
 orphanDownstreamOnPolicyDelete: false
+
+# The gate's operator listener: /metrics (Prometheus text), /stats, /activity,
+# and /healthz. `gateConfig` binds it to the pod's loopback, where nothing on
+# the cluster network can reach it and `kubectl port-forward` still can. The
+# keys here move it onto the pod network for an in-cluster scraper — a
+# Prometheus, or anteroom-stats in its Kubernetes mode.
+admin:
+  # -- Bind the operator listener to the pod network so an in-cluster scraper
+  # can reach it, by setting ANTEROOM_ADMIN_LISTEN on the injected sidecar
+  # (an environment variable overrides `admin_listen` in the mounted TOML,
+  # which is why `gateConfig` needs no edit and stays safe to override).
+  # OFF by default and deliberately so: the listener is UNAUTHENTICATED —
+  # reachability is its entire access control — and it reports traffic
+  # volumes and, with an `[activity]` section configured, visitor IP
+  # addresses. Turning this on without `networkPolicy` below publishes both
+  # to every pod in the cluster.
+  expose: false
+  # -- Port for the exposed listener. Injected as a container port named
+  # `anteroom-admin`, which is how a scraper finds it without knowing the
+  # number — the same trick the traffic port's `anteroom` name plays for the
+  # Service policy. Must not collide with the gate's 8080 or the app's port.
+  port: 8090
+  networkPolicy:
+    # -- Generate a NetworkPolicy into every opted-in namespace admitting the
+    # admin port only from the collector selected below. Requires a CNI that
+    # enforces NetworkPolicy, and READ THE NEXT SENTENCE: a NetworkPolicy
+    # that selects a pod denies every ingress it does not admit, so this also
+    # closes the direct route to the application's own port — the side door
+    # the example README describes — and on some CNIs it blocks kubelet probe
+    # traffic, which kills healthy pods. Verify probes survive on your CNI
+    # before enabling it, and use `extraIngress` for anything else that must
+    # still reach these pods.
+    enabled: false
+    # -- Labels identifying the collector's pods, admitted to `admin.port`.
+    collectorSelector:
+      app.kubernetes.io/name: anteroom-stats
+    # -- Labels identifying the namespace the collector runs in. Empty means
+    # "the same namespace as the gated pods", which is almost never what a
+    # cluster-wide collector wants.
+    collectorNamespaceSelector:
+      kubernetes.io/metadata.name: anteroom-system
+    # -- Extra ingress rules appended verbatim to the generated policy, for
+    # whatever else must still reach these pods once the deny-by-default of a
+    # NetworkPolicy applies — a second scraper, an in-cluster health checker,
+    # or the application's own port for a client that legitimately bypasses
+    # the gate.
+    extraIngress: []
 
 # -- Name of the per-namespace ConfigMap the generate policy creates and the
 # injected sidecar mounts at /etc/anteroom.
@@ -126,15 +148,14 @@ hmacSecret:
   sourceName: anteroom
 
 rbac:
-  # -- Create the ClusterRole that aggregates ConfigMap/Secret permissions to
-  # Kyverno's admission and background controllers — plus NetworkPolicy
-  # permissions when `policies.networkPolicy` is on, and only then. Without it
-  # the generate policy is refused at apply time by Kyverno's policy-validation
-  # webhook, which names the missing permission. Secrets are the sensitive half
-  # of the grant: the background controller can then read and write Secrets in
-  # every namespace, which is inherent to cloning a key across namespaces. If
-  # that is too broad, disable `hmacSecret.clone`, distribute the key another
-  # way, and narrow this role.
+  # -- Create the ClusterRole that aggregates ConfigMap/Secret permissions
+  # (and, with `admin.networkPolicy.enabled`, NetworkPolicy permissions) to
+  # Kyverno's admission and background controllers. Without it the generate
+  # policy is refused at apply time by Kyverno's policy-validation webhook.
+  # Secrets are the sensitive half of the grant: the background controller
+  # can then read and write Secrets in every namespace, which is inherent to
+  # cloning a key across namespaces. If that is too broad, disable
+  # `hmacSecret.clone`, distribute the key another way, and narrow this role.
   create: true
 
 # -- The gate's whole configuration file, generated verbatim into every

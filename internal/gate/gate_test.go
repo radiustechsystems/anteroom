@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,9 +21,49 @@ import (
 
 	"github.com/radiustechsystems/anteroom/internal/challenge"
 	"github.com/radiustechsystems/anteroom/internal/config"
+	"github.com/radiustechsystems/anteroom/internal/crawler"
+	"github.com/radiustechsystems/anteroom/internal/hosted"
 	"github.com/radiustechsystems/anteroom/internal/payment"
 	"github.com/radiustechsystems/anteroom/internal/token"
 )
+
+type testCrawlerVerifier struct {
+	claim    string
+	verified netip.Addr
+	verdict  crawler.Verdict
+	calls    int
+}
+
+func (v *testCrawlerVerifier) Claim(userAgent string) string {
+	if v.claim != "" {
+		return v.claim
+	}
+	if strings.Contains(userAgent, "Googlebot/") {
+		return "googlebot"
+	}
+	return ""
+}
+
+type testHostedVerifier struct {
+	verified netip.Addr
+	calls    int
+}
+
+func (v *testHostedVerifier) Verify(_ hosted.Provider, addr netip.Addr) bool {
+	v.calls++
+	return addr == v.verified
+}
+
+func (v *testCrawlerVerifier) Verify(_ context.Context, _ string, addr netip.Addr) crawler.Verdict {
+	v.calls++
+	if v.verdict != 0 {
+		return v.verdict
+	}
+	if addr == v.verified {
+		return crawler.Verified
+	}
+	return crawler.Unverified
+}
 
 // newTestGate spins up an upstream that echoes a marker, and a gate in front
 // of it built from a config file body.
@@ -184,8 +226,11 @@ cidrs = ["203.0.113.0/24"]
 	})
 	t.Run("browser without pass gets wait page", func(t *testing.T) {
 		w := do(g, browserReq("/article"))
-		if w.Code != 200 {
+		if w.Code != http.StatusForbidden {
 			t.Fatalf("wait page status = %d", w.Code)
+		}
+		if got := w.Header().Get(actionHeader); got != "challenge" {
+			t.Fatalf("%s = %q, want challenge", actionHeader, got)
 		}
 		b := w.Body.String()
 		if !strings.Contains(b, "anteroom-status") {
@@ -201,14 +246,28 @@ cidrs = ["203.0.113.0/24"]
 		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
 			t.Fatalf("wait page cacheable: %q", cc)
 		}
-		if w.Header().Get("X-Robots-Tag") != "noindex" {
+		if w.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
 			t.Fatal("wait page indexable")
 		}
 	})
-	t.Run("agent without pass gets 401 markdown", func(t *testing.T) {
+	t.Run("browser HEAD gets headers without a body", func(t *testing.T) {
+		r := browserReq("/article")
+		r.Method = http.MethodHead
+		w := do(g, r)
+		if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+			t.Fatalf("HEAD wait page = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+		}
+		if w.Body.Len() != 0 {
+			t.Fatalf("HEAD wait page wrote %d body bytes", w.Body.Len())
+		}
+	})
+	t.Run("agent without pass gets 403 markdown", func(t *testing.T) {
 		w := do(g, agentReq("/article"))
-		if w.Code != http.StatusUnauthorized {
+		if w.Code != http.StatusForbidden {
 			t.Fatalf("refusal status = %d", w.Code)
+		}
+		if got := w.Header().Get(actionHeader); got != "challenge" {
+			t.Fatalf("%s = %q, want challenge", actionHeader, got)
 		}
 		if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "markdown") {
 			t.Fatalf("refusal content-type = %q", ct)
@@ -271,7 +330,7 @@ func TestExpiryWalls(t *testing.T) {
 	if strings.Contains(w.Body.String(), "UPSTREAM:") {
 		t.Fatal("expired pass reached upstream")
 	}
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "anteroom-status") {
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "anteroom-status") {
 		t.Fatalf("expired browser should re-see the wait page, got %d", w.Code)
 	}
 }
@@ -465,8 +524,8 @@ ok_body_agents = ["claude-user"]
 		t.Fatal("200 body is not the instruction markdown")
 	}
 	// Regular agents still get the honest 401.
-	if w := do(g, agentReq("/x")); w.Code != http.StatusUnauthorized {
-		t.Fatalf("curl got %d, want 401", w.Code)
+	if w := do(g, agentReq("/x")); w.Code != http.StatusForbidden {
+		t.Fatalf("curl got %d, want 403", w.Code)
 	}
 
 	// The downgrade is withheld from a client that shows protocol competence:
@@ -476,32 +535,18 @@ ok_body_agents = ["claude-user"]
 		r := agentReq("/x")
 		r.Header.Set("User-Agent", "Claude-User (claude-code/2.1)")
 		r.Header.Set("PAYMENT-SIGNATURE", "eyJ4NDAyVmVyc2lvbiI6Mn0=")
-		if w := do(g, r); w.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401 for a payment-capable client", w.Code)
+		if w := do(g, r); w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want 403 for a payment-capable client", w.Code)
 		}
 	})
 	t.Run("not downgraded when asking for JSON", func(t *testing.T) {
 		r := agentReq("/x")
 		r.Header.Set("User-Agent", "Claude-User (claude-code/2.1)")
 		r.Header.Set("Accept", "application/json")
-		if w := do(g, r); w.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401 for a JSON client", w.Code)
+		if w := do(g, r); w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want 403 for a JSON client", w.Code)
 		}
 	})
-}
-
-// TestWWWAuthenticateSchemeIsNotPayment: at least one popular agent skill treats
-// `WWW-Authenticate: Payment …` as the marker for a different payment protocol,
-// so using that token would route agents into the wrong rail.
-func TestWWWAuthenticateSchemeIsNotPayment(t *testing.T) {
-	g, _ := newTestGate(t, fastCfg)
-	a := do(g, agentReq("/x")).Header().Get("WWW-Authenticate")
-	if !strings.HasPrefix(a, "Anteroom ") {
-		t.Fatalf("WWW-Authenticate = %q, want the Anteroom scheme token", a)
-	}
-	if strings.HasPrefix(strings.ToLower(a), "payment") {
-		t.Error("the Payment scheme token belongs to another protocol")
-	}
 }
 
 func TestOperatorPagesAreLive(t *testing.T) {
@@ -596,8 +641,8 @@ func TestRealAgentFetchToolsGetInstructions(t *testing.T) {
 			name:   "cloudflare agent fetch",
 			accept: "text/markdown, text/plain;q=0.9, application/json;q=0.8, text/html;q=0.5, */*;q=0.1",
 			ua:     "Mozilla/5.0 (compatible; CloudflareAgent)",
-			// Not in ok_body_agents, so an honest 401 — it reads bodies.
-			wantStatus: http.StatusUnauthorized,
+			// Not in ok_body_agents, so an honest 403 — it reads bodies.
+			wantStatus: http.StatusForbidden,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -619,18 +664,199 @@ func TestRealAgentFetchToolsGetInstructions(t *testing.T) {
 	}
 }
 
+func TestAndroidWebViewPackageNameIsNotXHR(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const ua = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.0.0 Safari/537.36 TwitterAndroid/12.19.1-release.0 (312191000-r-00) Pixel+8/17 (Google;Pixel+8;google;shiba;0;;1;2015)"
+	const accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+
+	webview := httptest.NewRequest(http.MethodGet, "/article", nil)
+	webview.Header.Set("User-Agent", ua)
+	webview.Header.Set("Accept", accept)
+	webview.Header.Set("X-Requested-With", "com.twitter.android")
+	webview.RemoteAddr = "192.0.2.10:1234"
+	w := do(g, webview)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Android WebView got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+
+	xhr := webview.Clone(webview.Context())
+	xhr.Header = webview.Header.Clone()
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	w = do(g, xhr)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Header().Get("Content-Type"), "markdown") {
+		t.Fatalf("XHR got status %d and content type %q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
+func TestVerifiedCrawlerBypassesEveryRoute(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`)
+	verifier := &testCrawlerVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.crawlers = verifier
+
+	verified := agentReq("/article")
+	verified.RemoteAddr = "192.0.2.2:1234"
+	verified.Header.Set("User-Agent", "Googlebot/2.1")
+	w := do(g, verified)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("verified Googlebot was not proxied: %d %q", w.Code, w.Body.String())
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verified Googlebot caused %d verifier calls, want 1", verifier.calls)
+	}
+
+	spoof := agentReq("/article")
+	spoof.RemoteAddr = "192.0.2.3:1234"
+	spoof.Header.Set("User-Agent", "Googlebot/2.1")
+	w = do(g, spoof)
+	if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+		t.Fatalf("unverified Googlebot response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+	}
+}
+
+func TestUnconfiguredCrawlerUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const ua = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+	pass := solveAndGetCookie(t, g, nil, func(r *http.Request) {
+		r.Header.Set("User-Agent", ua)
+	})
+	r := agentReq("/article")
+	r.Header.Set("User-Agent", ua)
+	r.AddCookie(pass)
+	w := do(g, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("unconfigured crawler did not use its valid pass: %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestConfiguredCrawlerWithUnresolvedClientUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"\n[bypass]\nverified_crawlers = [\"googlebot\"]\n")
+	g.crawlers = &testCrawlerVerifier{}
+	var logs bytes.Buffer
+	g.lg = slog.New(slog.NewTextHandler(&logs, nil))
+	r := agentReq("/article")
+	r.RemoteAddr = "not-an-address"
+	r.Header.Set("User-Agent", "Googlebot/2.1")
+	for range 2 {
+		w := do(g, r)
+		if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+			t.Fatalf("unresolved crawler response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+		}
+	}
+	if got := strings.Count(logs.String(), "machine identity verification skipped"); got != 1 {
+		t.Fatalf("warning count = %d, want one; logs: %s", got, logs.String())
+	}
+}
+
+func TestCrawlerVerificationFailureIsTemporary(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+`
+[bypass]
+verified_crawlers = ["googlebot"]
+`)
+	g.crawlers = &testCrawlerVerifier{verdict: crawler.Indeterminate}
+	r := agentReq("/article")
+	r.Header.Set("User-Agent", "Googlebot/2.1")
+	w := do(g, r)
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "60" {
+		t.Fatalf("verification failure = %d Retry-After %q", w.Code, w.Header().Get("Retry-After"))
+	}
+	if w.Header().Get(actionHeader) != "crawler-verification-unavailable" {
+		t.Fatalf("verification failure marker = %q", w.Header().Get(actionHeader))
+	}
+}
+
+func TestHostedFetcherRequiresPublishedSource(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	verifier := &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.hosted = verifier
+
+	for _, ua := range []string{
+		"Mozilla/5.0 (compatible; Claude-User/1.0; +claude-user@anthropic.com)",
+		"Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)",
+		"Mozilla/5.0 (compatible; Google-Agent; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-agent)",
+	} {
+		r := agentReq("/article")
+		r.RemoteAddr = "192.0.2.2:1234"
+		r.Header.Set("User-Agent", ua)
+		w := do(g, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UPSTREAM:") {
+			t.Errorf("verified %q was not proxied: %d %q", ua, w.Code, w.Body.String())
+		}
+	}
+	if verifier.calls != 3 {
+		t.Fatalf("verified fetchers caused %d verifier calls, want 3", verifier.calls)
+	}
+
+	spoof := agentReq("/article")
+	spoof.RemoteAddr = "192.0.2.3:1234"
+	spoof.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Claude-User/1.0; +claude-user@anthropic.com)")
+	w := do(g, spoof)
+	if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+		t.Fatalf("unverified hosted fetcher response = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+	}
+}
+
+func TestHostedFetcherBypassCanBeDisabled(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"[triage]\nallow_hosted_fetchers = false\n")
+	g.hosted = &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	r := agentReq("/article")
+	r.RemoteAddr = "192.0.2.2:1234"
+	r.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)")
+	if w := do(g, r); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatalf("disabled hosted bypass returned %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestHostedFetcherWithUnresolvedClientUsesTheOrdinaryLadder(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	g.hosted = &testHostedVerifier{}
+	var logs bytes.Buffer
+	g.lg = slog.New(slog.NewTextHandler(&logs, nil))
+	r := agentReq("/article")
+	r.RemoteAddr = "not-an-address"
+	r.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)")
+	for range 2 {
+		w := do(g, r)
+		if w.Code != http.StatusForbidden || w.Header().Get(actionHeader) != "challenge" {
+			t.Fatalf("unresolved hosted fetcher = %d, marker %q", w.Code, w.Header().Get(actionHeader))
+		}
+	}
+	if got := strings.Count(logs.String(), "machine identity verification skipped"); got != 1 {
+		t.Fatalf("warning count = %d, want one; logs: %s", got, logs.String())
+	}
+}
+
+func TestCrawlerClaimPrecedesHostedClaim(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg+"\n[bypass]\nverified_crawlers = [\"googlebot\"]\n")
+	crawlers := &testCrawlerVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	hostedVerifier := &testHostedVerifier{verified: netip.MustParseAddr("192.0.2.2")}
+	g.crawlers = crawlers
+	g.hosted = hostedVerifier
+	r := agentReq("/article")
+	r.RemoteAddr = "192.0.2.2:1234"
+	r.Header.Set("User-Agent", "Googlebot/2.1 Google-Agent;")
+	w := do(g, r)
+	if w.Code != http.StatusOK || crawlers.calls != 1 || hostedVerifier.calls != 0 {
+		t.Fatalf("crawler calls = %d, hosted calls = %d, status = %d", crawlers.calls, hostedVerifier.calls, w.Code)
+	}
+}
+
 func TestPrefersMarkdown(t *testing.T) {
 	for _, tc := range []struct {
 		accept string
 		want   bool
 	}{
-		{"text/markdown, text/html, */*", true},    // equal q, markdown first
-		{"text/html, text/markdown", false},        // equal q, html first
-		{"text/markdown;q=0.9, text/html", false},  // html outranks
-		{"text/html;q=0.5, text/markdown", true},   // markdown outranks
-		{"text/markdown", true},                    // html not offered
-		{"text/html,application/xhtml+xml", false}, // ordinary browser
-		{"*/*", false}, // neither named
+		{"text/markdown, text/html, */*", true},     // equal q, markdown first
+		{"text/html, text/markdown", false},         // equal q, html first
+		{"text/markdown;q=0.9, text/html", false},   // html outranks
+		{"text/html;q=0.5, text/markdown", true},    // markdown outranks
+		{"text/markdown", true},                     // html not offered
+		{"text/markdown;q=0", false},                // explicitly unacceptable
+		{"text/markdown;q=0, text/html;q=0", false}, // neither acceptable
+		{"text/html,application/xhtml+xml", false},  // ordinary browser
+		{"*/*", false},                              // neither named
 		{"", false},
 	} {
 		if got := prefersMarkdown(tc.accept); got != tc.want {
@@ -1090,9 +1316,11 @@ func TestGateAuthoredHeaderNotSpoofable(t *testing.T) {
 	// `strings.Contains(body, "spoofed")` check could not fire under any
 	// implementation, correct or broken. What matters is what the UPSTREAM saw,
 	// and only an upstream can report that.
-	var saw string
+	var sawStatus, sawAction string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		saw = r.Header.Get("X-Anteroom-Status")
+		sawStatus = r.Header.Get("X-Anteroom-Status")
+		sawAction = r.Header.Get(actionHeader)
+		w.Header().Set(actionHeader, "challenge")
 		io.WriteString(w, "UPSTREAM:"+r.URL.Path)
 	}))
 	t.Cleanup(up.Close)
@@ -1113,11 +1341,12 @@ func TestGateAuthoredHeaderNotSpoofable(t *testing.T) {
 
 	r := agentReq("/robots.txt")
 	r.Header.Set("X-Anteroom-Status", "pass-paid")
+	r.Header.Set(actionHeader, "challenge")
 	w := do(g, r)
 	if !strings.Contains(w.Body.String(), "UPSTREAM:") {
 		t.Fatal("the bypassed path never reached the upstream, so nothing was tested")
 	}
-	if saw == "pass-paid" {
+	if sawStatus == "pass-paid" {
 		t.Fatal("a client's forged X-Anteroom-Status reached the upstream, which " +
 			"would read it as the gate's own verdict that this request was paid for")
 	}
@@ -1125,6 +1354,12 @@ func TestGateAuthoredHeaderNotSpoofable(t *testing.T) {
 	// header on the outbound clone cannot pass by deleting it only here.
 	if r.Header.Get("X-Anteroom-Status") == "pass-paid" {
 		t.Fatal("inbound X-Anteroom-Status survived on the request")
+	}
+	if sawAction != "" || r.Header.Get(actionHeader) != "" {
+		t.Fatal("a client's forged challenge marker reached the upstream")
+	}
+	if w.Header().Get(actionHeader) != "" {
+		t.Fatal("an upstream challenge marker escaped on ordinary application content")
 	}
 }
 
@@ -1600,14 +1835,6 @@ func TestPublicHostsPrecedeEveryAdmissionPath(t *testing.T) {
 	health.Host = "127.0.0.1:8080"
 	if w := do(g, health); w.Code != http.StatusOK {
 		t.Fatalf("local health probe under allowlist = %d", w.Code)
-	}
-}
-
-func TestRefusalCarriesWWWAuthenticate(t *testing.T) {
-	g, _ := newTestGate(t, fastCfg)
-	w := do(g, agentReq("/x"))
-	if a := w.Header().Get("WWW-Authenticate"); !strings.Contains(a, "Anteroom") {
-		t.Errorf("401 without a challenge header: %q", a)
 	}
 }
 
@@ -2094,6 +2321,12 @@ func TestIsBrowserNav(t *testing.T) {
 			method:  "GET",
 			headers: map[string]string{"Accept": htmlAccept, "User-Agent": browserUA},
 			want:    true,
+		},
+		{
+			name:    "html explicitly unacceptable",
+			method:  "GET",
+			headers: map[string]string{"Accept": "text/html;q=0, */*", "User-Agent": browserUA},
+			want:    false,
 		},
 		{
 			name:    "curl",

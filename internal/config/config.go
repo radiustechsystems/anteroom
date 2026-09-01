@@ -22,6 +22,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/radiustechsystems/anteroom/internal/bypass"
+	"github.com/radiustechsystems/anteroom/internal/crawler"
 	"github.com/radiustechsystems/anteroom/internal/token"
 )
 
@@ -217,8 +218,9 @@ type Rule struct {
 }
 
 type Bypass struct {
-	Paths []string `toml:"paths"`
-	CIDRs []string `toml:"cidrs"`
+	Paths            []string `toml:"paths"`
+	CIDRs            []string `toml:"cidrs"`
+	VerifiedCrawlers []string `toml:"verified_crawlers"`
 }
 
 // Activity turns on the per-IP challenge-activity log served at the admin
@@ -253,8 +255,9 @@ func (a *Activity) validate() error {
 }
 
 type Triage struct {
-	JSONAccept   bool     `toml:"json_accept"`
-	OKBodyAgents []string `toml:"ok_body_agents"`
+	JSONAccept          bool     `toml:"json_accept"`
+	OKBodyAgents        []string `toml:"ok_body_agents"`
+	AllowHostedFetchers bool     `toml:"allow_hosted_fetchers"`
 }
 
 // defaults returns a Config carrying every default the contract documents.
@@ -282,12 +285,12 @@ func defaults() Config {
 		Inject:          true,
 		Triage: Triage{
 			JSONAccept: true,
-			// Some agentic fetch tools discard the body of any non-2xx
-			// response, so a 401 carrying instructions is invisible to them —
-			// measured behavior, not a guess. For those clients the
-			// instructions are served with status 200 instead, which is the
-			// only way they see anything at all. Matched case-insensitively as
-			// a substring of the User-Agent.
+			// Verified vendor-hosted user fetchers cannot complete PoW or x402,
+			// so the current policy admits them even on paid routes. Operators
+			// can disable that exception and refuse them instead.
+			AllowHostedFetchers: true,
+			// Claude Code's fetch output omits non-2xx bodies. Matching its
+			// User-Agent here keeps Anteroom's instructions visible.
 			OKBodyAgents: []string{"claude-user"},
 		},
 	}
@@ -396,6 +399,16 @@ func (c *Config) validate() error {
 	// Validate bypass + trusted_proxies by compiling them.
 	if _, err := bypass.New(c.Bypass.Paths, c.Bypass.CIDRs, c.TrustedProxies); err != nil {
 		return err
+	}
+	seenCrawler := make(map[string]bool, len(c.Bypass.VerifiedCrawlers))
+	for _, name := range c.Bypass.VerifiedCrawlers {
+		if !crawler.Supported(name) {
+			return fmt.Errorf("config: bypass.verified_crawlers entry %q is unsupported — available: %s", name, crawler.AvailableNames)
+		}
+		if seenCrawler[name] {
+			return fmt.Errorf("config: bypass.verified_crawlers contains duplicate %q", name)
+		}
+		seenCrawler[name] = true
 	}
 	for i := range c.HMACKeys {
 		k := &c.HMACKeys[i]

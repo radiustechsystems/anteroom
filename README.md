@@ -43,10 +43,31 @@ after a restart.
 The goal is not to tell humans from bots. It is that high-volume automated access
 is either cheap to tolerate, cheap to discourage, or paid for.
 
+One explicit exception is enabled by default: source-verified `Claude-User`,
+`ChatGPT-User`, and `Google-Agent` hosted fetchers pass through because they can
+complete neither the browser proof nor x402. This also bypasses paid routes; it
+authenticates vendor infrastructure, not a human or application user. Set
+`triage.allow_hosted_fetchers = false` to give those requests a strict `403`.
+
 ## Running it
 
-Requires Go 1.22+ (see `go.mod`). Release artifacts use the current stable Go
-toolchain.
+Every release attaches a static binary for Linux (x86-64, ARM64, ARMv7), macOS
+(Intel and Apple silicon), Windows (x86-64), and FreeBSD (x86-64). Nothing to
+install alongside it; the archive also holds the example config.
+
+```sh
+# from https://github.com/radiustechsystems/anteroom/releases/latest
+tar xzf anteroom_v0.4.0_linux_amd64.tar.gz
+cd anteroom_v0.4.0_linux_amd64
+cp anteroom.example.toml anteroom.toml
+```
+
+The archives come with a `SHA256SUMS` signed by the release workflow;
+[`docs/releasing.md`](docs/releasing.md) has the two commands that check it, and
+they are worth running on something that sits in front of your site.
+
+Or build it. Requires Go 1.22+ (see `go.mod`); release artifacts use the current
+stable Go toolchain.
 
 ```sh
 go build ./cmd/anteroom                  # produces ./anteroom
@@ -101,7 +122,7 @@ curl -s localhost:8080/                           # the machine-readable refusal
 curl -s localhost:8080/.anteroom/instructions.md  # how a client passes the gate
 ```
 
-A non-browser client gets `401` with markdown telling it how to solve the puzzle
+A non-browser client gets `403` with markdown telling it how to solve the puzzle
 (`Accept: application/json` gets the same as JSON). That document is the contract
 for automated access, and it is worth reading once: `GET /.anteroom/challenge`,
 find a nonce whose `sha256(challenge + nonce)` sorts below the returned

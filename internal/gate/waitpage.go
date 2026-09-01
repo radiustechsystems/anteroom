@@ -144,9 +144,9 @@ func (p *pageSource) read(name string, fallback []byte) []byte {
 // serveWaitPage renders header + solver + footer. Always no-store and
 // noindex: the wait page is a checkpoint, never content.
 func (g *Gate) serveWaitPage(w http.ResponseWriter, r *http.Request) {
-	noStore(w)
+	challengeRequired(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("X-Robots-Tag", "noindex")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 	// The wait page carries the original URL; an operator header.html that pulls
 	// a third-party asset must not leak it.
 	w.Header().Set("Referrer-Policy", "same-origin")
@@ -158,6 +158,10 @@ func (g *Gate) serveWaitPage(w http.ResponseWriter, r *http.Request) {
 	// and a <noscript> block (surfaced by text extractors and by any agent that
 	// renders the page as text).
 	w.Header().Add("Link", "<"+pathInstructions+`>; rel="alternate"; type="text/markdown"`)
+	w.WriteHeader(http.StatusForbidden)
+	if r.Method == http.MethodHead {
+		return
+	}
 
 	cfg, _ := json.Marshal(map[string]any{
 		"challengeURL": pathChallenge,
@@ -239,27 +243,27 @@ func (g *Gate) serveInstructions(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveRefusal is the non-browser answer: machine-readable instructions in
-// markdown (default) or JSON (Accept: application/json). Status is 401 —
+// markdown (default) or JSON (Accept: application/json). Status is 403 —
 // except for configured 2xx-only fetch tools, which discard non-2xx bodies
 // and would otherwise see nothing at all. When configured, the x402 payment
 // offer is included in this response.
+//
+// Deliberately omit WWW-Authenticate: 403 does not require it, and advertising
+// a Payment scheme there makes some agent clients mistake x402 for HTTP auth.
 func (g *Gate) serveRefusal(w http.ResponseWriter, r *http.Request) {
-	noStore(w)
-	status := http.StatusUnauthorized
+	status := http.StatusForbidden
 	if g.okBodyAgent(r) {
 		status = http.StatusOK
 	}
-	if status == http.StatusUnauthorized {
-		// RFC 9110 requires a challenge on 401. Ours is not an HTTP auth scheme,
-		// but naming it (with the endpoint to use) keeps strict clients from
-		// mishandling the response and points a human at the instructions.
-		//
-		// The scheme token must stay "Anteroom". Do NOT change it to "Payment":
-		// at least one popular agent skill treats `WWW-Authenticate: Payment …`
-		// as the marker for a different payment protocol entirely and would
-		// route agents into the wrong rail.
-		w.Header().Set("WWW-Authenticate", `Anteroom realm="proof-of-work", challenge="`+pathChallenge+`"`)
-	}
+	g.renderRefusal(w, r, status)
+}
+
+func (g *Gate) serveStrictRefusal(w http.ResponseWriter, r *http.Request) {
+	g.renderRefusal(w, r, http.StatusForbidden)
+}
+
+func (g *Gate) renderRefusal(w http.ResponseWriter, r *http.Request, status int) {
+	challengeRequired(w)
 
 	if g.cfg.Triage.JSONAccept && wantsJSON(r) {
 		w.Header().Set("Content-Type", "application/json")

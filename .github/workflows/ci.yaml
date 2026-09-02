@@ -113,6 +113,108 @@ jobs:
         if: always()
         run: docker ps -a --filter 'name=artest-' -q | xargs -r docker rm -f
 
+  helm:
+    # The charts ship straight from this tree, so "verified" includes them:
+    # a chart change published under an unchanged `version` silently replaces
+    # what users already deployed, and a values.yaml edit without regenerated
+    # READMEs leaves the docs describing defaults that no longer exist. The
+    # docs check runs on every event (it gates releases through workflow_call);
+    # the version-bump check needs a PR base to diff against, so it is
+    # PR-only. Findings are also posted as a single sticky PR comment so chart
+    # authors see them without opening the job log.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Only for the sticky findings comment. Absent on fork PRs, where the
+      # comment step degrades to a warning and the job failure carries the news.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version-bump check diffs each chart against the PR base, which
+          # a shallow single-commit checkout cannot express.
+          fetch-depth: 0
+      - name: install helm-docs
+        run: |
+          curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_x86_64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin helm-docs
+      - name: chart versions bumped
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p "$RUNNER_TEMP/helm-findings"
+          for chart in charts/*/; do
+            chart="${chart%/}"
+            # Merge-base diff, so commits already on the base branch do not
+            # count as changes this PR must version.
+            git diff --quiet "origin/${GITHUB_BASE_REF}...HEAD" -- "$chart" && continue
+            new="$(yq '.version' "$chart/Chart.yaml")"
+            # A chart absent from the base is new; any version is a bump.
+            old="$(git show "origin/${GITHUB_BASE_REF}:$chart/Chart.yaml" 2>/dev/null | yq '.version' - || true)"
+            if [ -n "$old" ] && [ "$old" != "null" ] && [ "$old" = "$new" ]; then
+              echo "- \`$chart\` changed in this PR but \`$chart/Chart.yaml\` still has \`version: $new\` — bump it." \
+                >> "$RUNNER_TEMP/helm-findings/versions.md"
+            fi
+          done
+          if [ -s "$RUNNER_TEMP/helm-findings/versions.md" ]; then
+            cat "$RUNNER_TEMP/helm-findings/versions.md"
+          fi
+      - name: chart READMEs regenerated
+        run: |
+          mkdir -p "$RUNNER_TEMP/helm-findings"
+          helm-docs --chart-search-root charts
+          if ! git diff --quiet -- 'charts/*/README.md'; then
+            {
+              echo '- Chart READMEs are stale — run `make helm-docs` and commit the result:'
+              echo '  ```'
+              git diff --stat -- 'charts/*/README.md' | sed 's/^/  /'
+              echo '  ```'
+            } >> "$RUNNER_TEMP/helm-findings/docs.md"
+            git diff -- 'charts/*/README.md'
+          fi
+      - name: comment findings on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = `${process.env.RUNNER_TEMP}/helm-findings`;
+            const read = f => { try { return fs.readFileSync(`${dir}/${f}`, 'utf8').trim(); } catch { return ''; } };
+            const findings = [read('versions.md'), read('docs.md')].filter(Boolean).join('\n');
+            // A step failing for other reasons (install, network) leaves no
+            // findings but is not a pass — leave any existing comment alone.
+            if (!findings && '${{ job.status }}' !== 'success') return;
+            const marker = '<!-- anteroom-helm-check -->';
+            const body = findings
+              ? `${marker}\n### Helm chart checks failed\n\n${findings}\n`
+              : `${marker}\n### Helm chart checks passed\n\nEarlier findings on this PR are resolved.\n`;
+            let existing;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo, issue_number: context.issue.number, per_page: 100,
+              });
+              existing = comments.find(c => c.body && c.body.includes(marker));
+              // One sticky comment, updated in place: repeated pushes must not
+              // bury the review thread, and a fixed PR should say so.
+              if (existing) {
+                await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+              } else if (findings) {
+                await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+              }
+            } catch (e) {
+              // Fork PRs get a read-only token; the job failure still reports.
+              core.warning(`could not post PR comment: ${e.message}`);
+            }
+            if (findings) core.setFailed(`helm chart checks failed:\n${findings}`);
+      - name: fail on findings
+        # workflow_call and push runs have no comment step, so the docs check
+        # must fail the job directly there.
+        if: github.event_name != 'pull_request'
+        run: |
+          if cat "$RUNNER_TEMP"/helm-findings/*.md 2>/dev/null | grep -q .; then
+            cat "$RUNNER_TEMP"/helm-findings/*.md
+            exit 1
+          fi
+
   browser:
     # Real engines cover the service-worker, renewal, and JavaScript fallback
     # behavior that unit and container-only tests cannot execute.

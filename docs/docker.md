@@ -123,7 +123,7 @@ is kept small.
 | `ANTEROOM_LISTEN` | bind address; defaults to `:8080` |
 | `ANTEROOM_PAGES` | directory holding `header.html` and `footer.html` |
 | `ANTEROOM_HMAC_KEY` | the signing key; registers as `kid = "env"` |
-| `ANTEROOM_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`; `-v` still forces debug |
+| `ANTEROOM_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`; `serve --verbose` still forces debug |
 | `ANTEROOM_LOG_FORMAT` | `json`, `logfmt`, or `text` (the default) |
 
 **Ports.** The gate binds `:8080` as a non-root user. Publish it as `-p 80:8080`
@@ -149,8 +149,8 @@ UID 65532. Without it, the default database resolves beside the read-only
 next challenge with no restart.
 
 **Health.** The image has a `HEALTHCHECK` that runs the binary's own
-`-healthcheck` flag, which probes `/.anteroom/healthz` over loopback and exits
-0 or 1. There is no shell and no curl in the image, so this flag is the only way
+`healthcheck` verb, which probes `/.anteroom/healthz` over loopback and exits
+0 or 1. There is no shell and no curl in the image, so this verb is the only way
 a container can check itself; from outside, probe `/.anteroom/healthz` directly.
 
 **Signals.** SIGTERM drains in-flight requests for `shutdown_grace` (default
@@ -364,11 +364,11 @@ docker buildx build --platform linux/amd64,linux/arm64 -t anteroom:local .
 
 ## Troubleshooting
 
-Start with `-v`. It logs one line per request naming the rung of the ladder that
-answered, which turns "why was this walled?" into a single word:
+Start with `serve --verbose`. It logs one line per request naming the rung of the
+ladder that answered, which turns "why was this walled?" into a single word:
 
 ```yaml
-command: ["-config", "/etc/anteroom/anteroom.toml", "-v"]
+command: ["serve", "--config", "/etc/anteroom/anteroom.toml", "--verbose"]
 ```
 
 ```

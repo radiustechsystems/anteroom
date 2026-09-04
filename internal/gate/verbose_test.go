@@ -15,7 +15,7 @@ import (
 	"github.com/radiustechsystems/anteroom/internal/config"
 )
 
-// verboseGate builds a gate logging at the level `anteroom -v` selects, plus the
+// verboseGate builds a gate logging at the level `anteroom serve --verbose` selects, plus the
 // buffer it logs into.
 func verboseGate(t *testing.T, cfgBody string, level slog.Level) (*Gate, *bytes.Buffer, *http.Cookie) {
 	t.Helper()
@@ -45,7 +45,7 @@ func verboseGate(t *testing.T, cfgBody string, level slog.Level) (*Gate, *bytes.
 }
 
 // TestVerboseLogsTheRungThatAnswered pins the vocabulary of the log line to the
-// rungs of the ladder. The point of -v is answering "why did this request get
+// rungs of the ladder. The point of serve --verbose is answering "why did this request get
 // walled?", which only works if the decision names a rung.
 func TestVerboseLogsTheRungThatAnswered(t *testing.T) {
 	tests := []struct {

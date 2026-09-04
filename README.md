@@ -99,7 +99,7 @@ Linux. See "Serving on port 80 or 443" in
 Then:
 
 ```sh
-./anteroom -config anteroom.toml       # -config defaults to ./anteroom.toml
+./anteroom serve --config anteroom.toml       # --config defaults to ./anteroom.toml
 ```
 
 Visit `http://localhost:8080` in a browser: you should get the wait page, then
@@ -111,7 +111,7 @@ verify them, which is fine for a first run and wrong in production.
 `ANTEROOM_LOG_LEVEL`, and `ANTEROOM_LOG_FORMAT` override the file, for containers
 and secret managers.
 
-Run with `-v` to log one line per request naming which rung of the ladder answered
+Run `anteroom serve --verbose` (or `-v`) to log one line per request naming which rung of the ladder answered
 it (`pass-pow`, `wait-page`, `refusal`, `bypass-path`, …) with the status, size,
 and duration. It is the quickest way to see why something is being walled.
 

@@ -151,7 +151,7 @@ func (g *Gate) serveChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	c, issuedAt, err := g.issuer.Issue(now, requestAudience(r), profile)
 	if err != nil {
-		g.lg.Error("issuing challenge", "err", err)
+		g.lg.ErrorContext(r.Context(), "issuing challenge", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -264,7 +264,7 @@ func (g *Gate) serveAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := g.setPassCookie(w, r, token.Pass{Kind: token.KindPoW, Scope: token.ScopeAll}, exp, rootAt); err != nil {
-		g.lg.Error("minting pass", "err", err)
+		g.lg.ErrorContext(r.Context(), "minting pass", "err", err)
 		g.noteAnswer("error", r)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(answerResponse{Error: "internal error"})

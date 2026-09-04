@@ -2,6 +2,7 @@ package gate
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -247,7 +248,7 @@ func (g *Gate) servePaymentRequired(w http.ResponseWriter, r *http.Request,
 	if enc, err := doc.Encode(); err == nil {
 		w.Header().Set(payment.HeaderRequired, enc)
 	} else {
-		g.lg.Error("encoding the payment offer", "err", err)
+		g.lg.ErrorContext(r.Context(), "encoding the payment offer", "err", err)
 	}
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", fmt.Sprint(int(retryAfter.Seconds())))
@@ -295,7 +296,7 @@ func (g *Gate) servePaymentPending(w http.ResponseWriter, r *http.Request, res p
 	}); err == nil {
 		w.Header().Set(payment.HeaderResponse, b64Std(enc))
 	} else {
-		g.lg.Error("encoding the pending settlement receipt", "err", err)
+		g.lg.ErrorContext(r.Context(), "encoding the pending settlement receipt", "err", err)
 	}
 	retry := res.RetryAfter
 	if retry < time.Second {
@@ -430,7 +431,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 	}
 	p, err := payment.DecodePayload(header)
 	if err != nil {
-		g.lg.Debug("malformed payment presentation", "err", err)
+		g.lg.DebugContext(r.Context(), "malformed payment presentation", "err", err)
 		g.servePaymentRequired(w, r, rule, "PAYMENT-SIGNATURE could not be decoded", 0)
 		return decisionPayMalformed
 	}
@@ -439,7 +440,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 	req, err := payment.MatchRail(p, doc.Accepts)
 	if err != nil {
 		// The gate never offered this rail. Refused locally, no egress.
-		g.lg.Debug("payment presented on an unoffered rail",
+		g.lg.DebugContext(r.Context(), "payment presented on an unoffered rail",
 			"network", p.Network(), "scheme", p.Scheme())
 		g.servePaymentRequired(w, r,
 			rule, "payment presented on a network or scheme this resource does not accept", 0)
@@ -454,7 +455,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 	// authorization identifies this payment cannot be chosen by the payer.
 	id, err := payment.ID(p, req)
 	if err != nil {
-		g.lg.Debug("payment presentation could not be identified", "err", err)
+		g.lg.DebugContext(r.Context(), "payment presentation could not be identified", "err", err)
 		g.servePaymentRequired(w, r, rule,
 			"the authorization in this payment names no payer and nonce to identify it by", 0)
 		return decisionPayUnidentified
@@ -462,7 +463,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 
 	state, lease, prior, err := g.grants.Begin(id)
 	if err != nil {
-		g.lg.Error("payment state unavailable", "pay_id", id[:16], "err", err)
+		g.lg.ErrorContext(r.Context(), "payment state unavailable", "pay_id", id[:16], "err", err)
 		g.servePaymentRequired(w, r, rule,
 			"payment recovery state is temporarily unavailable; retry the same payment", 5*time.Second)
 		return decisionPayStateUnavailable
@@ -476,7 +477,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		}
 		return g.servePaidGrant(w, r, rule, id, prior, true)
 	case payment.BeginSpent:
-		g.lg.Debug("payment entitlement expired", "pay_id", id[:16])
+		g.lg.DebugContext(r.Context(), "payment entitlement expired", "pay_id", id[:16])
 		g.servePaymentRequired(w, r, rule,
 			"this payment has already been used; sign a fresh one", 0)
 		return decisionPayReplay
@@ -487,7 +488,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 	}
 	defer func() {
 		if err := g.grants.Release(id, lease); err != nil {
-			g.lg.Error("releasing payment reservation", "pay_id", id[:16], "err", err)
+			g.lg.ErrorContext(r.Context(), "releasing payment reservation", "pay_id", id[:16], "err", err)
 		}
 	}()
 
@@ -504,7 +505,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		limitKey = ip.String()
 	}
 	if !g.payLimit.Allow(limitKey) {
-		g.lg.Warn("payment presentation rate limited", "client", limitKey)
+		g.lg.WarnContext(r.Context(), "payment presentation rate limited", "client", limitKey)
 		g.servePaymentRequired(w, r, rule,
 			"too many payment attempts; slow down and retry", 10*time.Second)
 		return decisionPayRateLimited
@@ -516,7 +517,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		// New() and MatchRail only returns offered rails — so reaching this is
 		// a gate bug, not a payment problem. Still 402, never 500: the free
 		// door remains the honest answer while the bug is fixed.
-		g.lg.Error("no verifier for an offered rail — gate construction bug", "network", req.Network)
+		g.lg.ErrorContext(r.Context(), "no verifier for an offered rail — gate construction bug", "network", req.Network)
 		g.servePaymentRequired(w, r, rule,
 			"the gate cannot reach a settlement service right now; retry shortly or use the free challenge", 5*time.Second)
 		return decisionPayInfra
@@ -536,16 +537,16 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 			ExpiresAt:   exp.Unix(),
 		})
 		if err != nil {
-			g.lg.Error("persisting a settled payment grant", "pay_id", id, "err", err)
+			g.lg.ErrorContext(r.Context(), "persisting a settled payment grant", "pay_id", id, "err", err)
 			g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
 			return decisionPayGrantFailed
 		}
 		if grant.Scope != route.scope || grant.Audience != requestAudience(r) {
-			g.lg.Error("settled payment raced with a different durable grant", "pay_id", id)
+			g.lg.ErrorContext(r.Context(), "settled payment raced with a different durable grant", "pay_id", id)
 			g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
 			return decisionPayGrantConflict
 		}
-		g.countPaidValue(grant.Amount, req.Network, rule)
+		g.countPaidValue(r.Context(), grant.Amount, req.Network, rule)
 		return g.servePaidGrant(w, r, rule, id, grant, false)
 
 	case payment.Invalid:
@@ -553,7 +554,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		if reason == "" {
 			reason = "payment rejected"
 		}
-		g.lg.Warn("payment rejected by the facilitator",
+		g.lg.WarnContext(r.Context(), "payment rejected by the facilitator",
 			"reason", reason, "payer", res.Payer, "scope", rule.Name)
 		g.servePaymentRequired(w, r, rule, reason, 0)
 		return decisionPayRejected
@@ -564,7 +565,7 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		// path — but unlike an ambiguous settle there is a transaction to name,
 		// and naming it is the difference between "reconcile this" and "pay
 		// again".
-		g.lg.Warn("settlement pending — the payer holds a broadcast transaction",
+		g.lg.WarnContext(r.Context(), "settlement pending — the payer holds a broadcast transaction",
 			"pay_id", id[:16], "tx", res.Tx, "network", res.Network,
 			"payer", res.Payer, "scope", rule.Name)
 		g.servePaymentPending(w, r, res)
@@ -577,13 +578,13 @@ func (g *Gate) servePayment(w http.ResponseWriter, r *http.Request, route *paidR
 		}
 		// Serve nothing, claim nothing. The payer's own retry is the recovery
 		// path, and the payment ID is quotable because both sides can compute it.
-		g.lg.Error("settle ambiguous — reconcile against the facilitator or chain",
+		g.lg.ErrorContext(r.Context(), "settle ambiguous — reconcile against the facilitator or chain",
 			"pay_id", id, "payer", res.Payer, "scope", rule.Name, "err", res.Err)
 		g.servePaymentRequired(w, r, rule, res.Reason, retry)
 		return decisionPayAmbiguous
 
 	default: // Indeterminate
-		g.lg.Warn("facilitator unavailable; payments degraded, free path unaffected",
+		g.lg.WarnContext(r.Context(), "facilitator unavailable; payments degraded, free path unaffected",
 			"err", res.Err, "scope", rule.Name)
 		// Tell the client how long the gate will actually refuse to try. Advising
 		// a retry sooner guarantees a wasted round trip, and synchronises every
@@ -615,10 +616,10 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 	if err := g.setPassCookie(w, r, token.Pass{
 		Kind:  token.KindPaid,
 		Scope: grant.Scope,
-		Payer: g.settlementField("payer", grant.Payer),
-		Tx:    g.settlementField("tx", grant.Transaction),
+		Payer: g.settlementField(r.Context(), "payer", grant.Payer),
+		Tx:    g.settlementField(r.Context(), "tx", grant.Transaction),
 	}, exp, time.Time{}); err != nil {
-		g.lg.Error("minting a durable paid pass", "pay_id", id, "err", err)
+		g.lg.ErrorContext(r.Context(), "minting a durable paid pass", "pay_id", id, "err", err)
 		g.servePaymentRequired(w, r, rule, ambiguousGrantFailure, 2*time.Second)
 		return decisionPayGrantFailed
 	}
@@ -628,7 +629,7 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 	if recovered {
 		message = "payment grant recovered"
 	}
-	g.lg.Info(message,
+	g.lg.InfoContext(r.Context(), message,
 		"pay_id", id[:16], "scope", rule.Name, "payer", grant.Payer,
 		"tx", grant.Transaction, "amount", grant.Amount, "network", grant.Network)
 
@@ -652,7 +653,7 @@ func (g *Gate) servePaidGrant(w http.ResponseWriter, r *http.Request, rule *conf
 // aggregate rails with different decimals. The facilitator-reported amount is
 // preferred (Verify already refused any mismatch); when x402's optional amount
 // is absent, the rail's asking price is what the facilitator settled against.
-func (g *Gate) countPaidValue(amount, network string, rule *config.Rule) {
+func (g *Gate) countPaidValue(ctx context.Context, amount, network string, rule *config.Rule) {
 	atomic, ok := new(big.Int).SetString(amount, 10)
 	if !ok || atomic.Sign() < 0 {
 		atomic = rule.PriceAtomic[network]
@@ -670,7 +671,7 @@ func (g *Gate) countPaidValue(amount, network string, rule *config.Rule) {
 	micros := new(big.Int).Mul(atomic, big.NewInt(1_000_000))
 	micros.Quo(micros, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
 	if !micros.IsUint64() {
-		g.lg.Warn("settled payment value overflows the metric; not counted",
+		g.lg.WarnContext(ctx, "settled payment value overflows the metric; not counted",
 			"amount", amount, "network", network)
 		return
 	}
@@ -694,11 +695,11 @@ const maxSettlementField = 128
 // it costs the audit trail for that grant and nothing else, and a TRUNCATED
 // hash would be worse than an absent one — it looks like evidence and matches
 // no transaction.
-func (g *Gate) settlementField(name, v string) string {
+func (g *Gate) settlementField(ctx context.Context, name, v string) string {
 	if len(v) <= maxSettlementField {
 		return v
 	}
-	g.lg.Warn("facilitator returned an oversized settlement field; omitting it from the pass",
+	g.lg.WarnContext(ctx, "facilitator returned an oversized settlement field; omitting it from the pass",
 		"field", name, "bytes", len(v), "cap", maxSettlementField,
 		"consequence", "this grant is not traceable from its pass; the settlement log line still has it")
 	return ""

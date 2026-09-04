@@ -113,7 +113,7 @@ which commit it is.
 
 ## The container contract
 
-**Environment variables.** Only these four exist. Everything else is a config
+**Environment variables.** Only these exist. Everything else is a config
 file setting, deliberately — the surface an operator can change without review
 is kept small.
 
@@ -123,6 +123,8 @@ is kept small.
 | `ANTEROOM_LISTEN` | bind address; defaults to `:8080` |
 | `ANTEROOM_PAGES` | directory holding `header.html` and `footer.html` |
 | `ANTEROOM_HMAC_KEY` | the signing key; registers as `kid = "env"` |
+| `ANTEROOM_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`; `-v` still forces debug |
+| `ANTEROOM_LOG_FORMAT` | `json`, `logfmt`, or `text` (the default) |
 
 **Ports.** The gate binds `:8080` as a non-root user. Publish it as `-p 80:8080`
 and the daemon owns the privileged half — no capability, no root, nothing to

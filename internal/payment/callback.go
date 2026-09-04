@@ -145,7 +145,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 	case c.egress <- struct{}{}:
 		defer func() { <-c.egress }()
 	default:
-		c.lg.Warn("facilitator egress saturated; shedding a payment presentation",
+		c.lg.WarnContext(ctx, "facilitator egress saturated; shedding a payment presentation",
 			"in_flight", len(c.egress), "cap", maxInFlight,
 			"consequence", "the client is told to retry; the free path is unaffected")
 		return Result{
@@ -162,7 +162,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 	if err != nil {
 		if res.transport {
 			if opened := c.breaker.Fail(); opened {
-				c.lg.Error("facilitator circuit breaker opened",
+				c.lg.ErrorContext(ctx, "facilitator circuit breaker opened",
 					"consequence", "payment presentations skip egress and fall back until it closes",
 					"free_path", "unaffected")
 			}
@@ -184,7 +184,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 	if err != nil {
 		if res.transport {
 			if opened := c.breaker.Fail(); opened {
-				c.lg.Error("facilitator circuit breaker opened",
+				c.lg.ErrorContext(ctx, "facilitator circuit breaker opened",
 					"consequence", "payment presentations skip egress and fall back until it closes")
 			}
 		}
@@ -210,7 +210,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 				// broadcast leaves nothing to reconcile against. That is the
 				// ambiguous case, with the same recovery: re-present the
 				// identical payload and let settle idempotency answer.
-				c.lg.Error("facilitator reported settlement_pending with no transaction",
+				c.lg.ErrorContext(ctx, "facilitator reported settlement_pending with no transaction",
 					"payer", sr.Payer, "network", sr.Network,
 					"action", "treating as ambiguous; the payer may retry the identical payload")
 				return Result{Verdict: Ambiguous, Reason: ambiguousReason,
@@ -220,7 +220,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 				return Result{Verdict: Ambiguous, Reason: ambiguousReason,
 					Err: fmt.Errorf("pending settlement reported network %q, requested %q", sr.Network, req.Network)}
 			}
-			c.lg.Warn("settlement pending — broadcast, confirmation unknown",
+			c.lg.WarnContext(ctx, "settlement pending — broadcast, confirmation unknown",
 				"tx", sr.Transaction, "network", sr.Network, "payer", sr.Payer,
 				"action", "no pass minted, payment not claimed; the payer reconciles and re-presents")
 			return Result{
@@ -233,7 +233,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 	if sr.Transaction == "" {
 		// A settlement claim with no evidence must never mint a pass that
 		// embeds a transaction. Ambiguous, never success.
-		c.lg.Error("facilitator claimed settle success without a transaction hash",
+		c.lg.ErrorContext(ctx, "facilitator claimed settle success without a transaction hash",
 			"payer", sr.Payer, "network", sr.Network,
 			"action", "treating as ambiguous; the payer may retry the identical payload")
 		return Result{Verdict: Ambiguous, Reason: ambiguousReason,
@@ -245,7 +245,7 @@ func (c *CallbackVerifier) Verify(ctx context.Context, p Payload, req Requiremen
 		// gate asked for, whatever it says about success. Ambiguous rather than
 		// invalid: something may well have moved on that other chain, and the
 		// operator needs to know rather than have the payer told to sign again.
-		c.lg.Error("facilitator settled on a different network than requested",
+		c.lg.ErrorContext(ctx, "facilitator settled on a different network than requested",
 			"requested", req.Network, "settled", sr.Network, "tx", sr.Transaction,
 			"payer", sr.Payer, "action", "no pass minted; reconcile against the chain")
 		return Result{Verdict: Ambiguous, Reason: ambiguousReason,
@@ -332,7 +332,7 @@ func (c *CallbackVerifier) call(ctx context.Context, path string, p Payload, req
 		if err != nil {
 			cancel()
 			last = fmt.Errorf("%s: %w", path, err)
-			c.lg.Warn("facilitator call failed",
+			c.lg.WarnContext(ctx, "facilitator call failed",
 				"endpoint", path, "attempt", attempt, "elapsed", time.Since(start),
 				"budget", budget, "err", err)
 			if attempt < attempts && retryable(err) {
@@ -341,7 +341,7 @@ func (c *CallbackVerifier) call(ctx context.Context, path string, p Payload, req
 			return callResult{transport: true}, last
 		}
 
-		res, err := c.decode(path, resp, out)
+		res, err := c.decode(ctx, path, resp, out)
 		cancel()
 		if err != nil {
 			return res, err
@@ -353,26 +353,26 @@ func (c *CallbackVerifier) call(ctx context.Context, path string, p Payload, req
 
 // decode turns a facilitator response into either a decoded document or a
 // classified failure.
-func (c *CallbackVerifier) decode(path string, resp *http.Response, out any) (callResult, error) {
+func (c *CallbackVerifier) decode(ctx context.Context, path string, resp *http.Response, out any) (callResult, error) {
 	defer resp.Body.Close()
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 
 	switch {
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		loc := resp.Header.Get("Location")
-		c.lg.Error("facilitator redirected",
+		c.lg.ErrorContext(ctx, "facilitator redirected",
 			"endpoint", path, "status", resp.StatusCode, "location", loc,
 			"fix", "set the canonical facilitator URL in anteroom.toml; redirects are never followed on a POST")
 		return callResult{transport: true},
 			fmt.Errorf("%s: redirected to %q", path, loc)
 
 	case resp.StatusCode == http.StatusTooManyRequests:
-		c.lg.Warn("facilitator rate limited us", "endpoint", path,
+		c.lg.WarnContext(ctx, "facilitator rate limited us", "endpoint", path,
 			"retry_after", resp.Header.Get("Retry-After"))
 		return callResult{transport: true}, fmt.Errorf("%s: rate limited", path)
 
 	case resp.StatusCode >= 500:
-		c.lg.Warn("facilitator server error", "endpoint", path,
+		c.lg.WarnContext(ctx, "facilitator server error", "endpoint", path,
 			"status", resp.StatusCode, "body", snippet(raw))
 		return callResult{transport: true},
 			fmt.Errorf("%s: status %d", path, resp.StatusCode)
@@ -385,7 +385,7 @@ func (c *CallbackVerifier) decode(path string, resp *http.Response, out any) (ca
 	if err := json.Unmarshal(raw, out); err != nil {
 		// A 4xx that does not decode is still a failure of this call, and on
 		// /settle it is ambiguous — which the caller decides, not us.
-		c.lg.Warn("facilitator response did not decode",
+		c.lg.WarnContext(ctx, "facilitator response did not decode",
 			"endpoint", path, "status", resp.StatusCode, "body", snippet(raw), "err", err)
 		return callResult{}, fmt.Errorf("%s: malformed response: %w", path, err)
 	}

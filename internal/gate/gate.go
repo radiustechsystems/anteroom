@@ -312,7 +312,7 @@ func newProxy(u *url.URL, socket string, m *bypass.Matcher, lg *slog.Logger, ups
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			upstreamErr.Inc()
-			lg.Error("upstream unreachable", "err", err, "path", r.URL.Path)
+			lg.ErrorContext(r.Context(), "upstream unreachable", "err", err, "path", r.URL.Path)
 			http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		},
 	}
@@ -390,7 +390,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ua := request.facts.userAgent; ua != "" {
 		attrs = append(attrs, "ua", ua)
 	}
-	g.lg.Debug("hit", attrs...)
+	g.lg.DebugContext(request.Context(), "hit", attrs...)
 }
 
 // serve is the ladder proper. It returns the name of the rung that answered, for
@@ -571,11 +571,11 @@ func (g *Gate) forward(w http.ResponseWriter, r *http.Request) {
 // noteInjectionSkipped logs every skipped injection at debug level and warns
 // once per reason, avoiding per-request warning noise from persistent policies.
 func (g *Gate) noteInjectionSkipped(r *http.Request, reason string) {
-	g.lg.Debug("renewal script not injected", "reason", reason, "path", r.URL.Path)
+	g.lg.DebugContext(r.Context(), "renewal script not injected", "reason", reason, "path", r.URL.Path)
 	if _, seen := g.skipReported.LoadOrStore(reason, struct{}{}); seen {
 		return
 	}
-	g.lg.Warn("renewal script not injected — visitors reading these pages will lapse and be re-challenged",
+	g.lg.WarnContext(r.Context(), "renewal script not injected — visitors reading these pages will lapse and be re-challenged",
 		"reason", reason,
 		"example_path", r.URL.Path,
 		"consequence", "the pass is not renewed from this response, so the visitor is walled again when it expires",

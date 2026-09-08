@@ -6,6 +6,8 @@ injects a script into HTML. Each of those has consequences. This document states
 them plainly — what must be true of your deployment, and what stops working
 until you configure around it.
 
+For removed settings and changed defaults, see [Configuration upgrades](config-upgrades.md).
+
 ## Deployment prerequisites
 
 1. **HTTPS, or `localhost` — or opt into the fallback.** The solver uses

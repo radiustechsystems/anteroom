@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -304,6 +305,9 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
+	if err := validateConfigKeys(meta); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
 	if un := meta.Undecoded(); len(un) > 0 {
 		// Unknown keys are errors: a typo silently reverting to a default is
 		// exactly the failure mode a security tool must not have.
@@ -380,10 +384,10 @@ func (c *Config) validate() error {
 	}
 	// A zero difficulty accepts any hash — a gate that gates nothing. Refuse it
 	// rather than fail open silently.
-	if c.Difficulty < minDifficulty || c.Difficulty > 255 {
+	if math.IsNaN(c.Difficulty) || c.Difficulty < minDifficulty || c.Difficulty > 255 {
 		return fmt.Errorf("%w: difficulty %v outside [%v, 255] — below %v the puzzle costs an attacker nothing", ErrBadDifficulty, c.Difficulty, minDifficulty, minDifficulty)
 	}
-	if c.RenewDifficulty < 0 || c.RenewDifficulty > 255 {
+	if math.IsNaN(c.RenewDifficulty) || c.RenewDifficulty < 0 || c.RenewDifficulty > 255 {
 		return fmt.Errorf("%w: renew_difficulty %v outside [0, 255]", ErrBadDifficulty, c.RenewDifficulty)
 	}
 	if c.RenewDifficulty > c.Difficulty {

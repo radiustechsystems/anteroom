@@ -202,3 +202,51 @@ gateConfig: |
   [triage]
   json_accept    = true
   ok_body_agents = ["claude-user"]
+
+  # No [payments]: the pay door is off in the chart, and turning it
+  # on takes more than uncommenting the rail below. TWO THINGS THE
+  # CHART DOES NOT YET PROVIDE:
+  #
+  #   1. A writable path for `state_file`. The grant ledger is a
+  #      bbolt database and the sidecar runs with
+  #      readOnlyRootFilesystem and mounts only this ConfigMap,
+  #      read-only. Without a writable volume the gate fails at
+  #      startup — the pod never becomes Ready, so the Service
+  #      sends it nothing, but it will not serve either.
+  #   2. CIRCLE_API_KEY on the sidecar. Only ANTEROOM_HMAC_KEY is
+  #      wired from a Secret today; the facilitator credential
+  #      needs the same treatment.
+  #
+  # Both are changes to the injection policy, not to this file.
+  # Until they land, this block is documentation of the shape.
+  #
+  # The rail is Circle's Arc L1, where USDC is the native asset and
+  # the address below is its ERC-20 view at six decimals. Circle
+  # runs the facilitator, so there is no relayer and no key to
+  # hold: it verifies the EIP-3009 authorization, pays the gas and
+  # broadcasts. `asset_name` is "USDC" and not the "USD Coin" that
+  # Base and Polygon USDC use for the same field — a wrong value
+  # there makes every client signature fail verification.
+  #
+  # [payments]
+  # pay_to               = "0xYourReceivingAddress"
+  # state_file           = "/var/lib/anteroom/payments.db"
+  # facilitator          = "https://api.circle.com/v1/facilitator/x402"
+  # facilitator_headers  = ["Authorization: Bearer ${CIRCLE_API_KEY}"]
+  # max_timeout_seconds  = 300
+  # resource_description = "Protected content"
+  #
+  # [[payments.rails]]
+  # network       = "eip155:5042"
+  # asset         = "0x3600000000000000000000000000000000000000"
+  # decimals      = 6
+  # asset_name    = "USDC"
+  # asset_version = "2"
+  # asset_transfer_method = "eip3009"
+  # rpc_url       = "https://rpc.mainnet.arc.io"
+  #
+  # [[payments.rules]]
+  # name     = "site"
+  # paths    = ["/*"]
+  # price    = "$0.01"
+  # paid_ttl = "1h"

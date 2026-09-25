@@ -1785,3 +1785,109 @@ func TestFreePassesCarryNoSettlementFields(t *testing.T) {
 		t.Errorf("pow pass carries payer=%q tx=%q, want both empty", p.Payer, p.Tx)
 	}
 }
+
+// arcGate stands up a single-rail Arc gate settling through a stand-in for
+// Circle's hosted facilitator: a per-rail base URL that carries a path, and a
+// per-rail bearer credential, which is the shape the shipped example documents.
+func arcGate(t *testing.T) (*Gate, *facFake) {
+	t.Helper()
+	t.Setenv("TEST_ARC_CIRCLE_KEY", "sk-arc-test")
+	fac := newFacFake(t, "eip155:5042")
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "UPSTREAM:"+r.URL.Path)
+	}))
+	t.Cleanup(up.Close)
+
+	body := "upstream = \"" + up.URL + "\"\ndifficulty = 6\n\n" +
+		"[payments]\npay_to = \"0x000000000000000000000000000000000000dEaD\"\n" +
+		"facilitator = \"" + fac.srv.URL + "\"\nmax_timeout_seconds = 300\n\n" +
+		"[[payments.rails]]\nnetwork = \"eip155:5042\"\n" +
+		"asset = \"0x3600000000000000000000000000000000000000\"\ndecimals = 6\n" +
+		"asset_name = \"USDC\"\nasset_version = \"2\"\nasset_transfer_method = \"eip3009\"\n" +
+		"rpc_url = \"https://rpc.mainnet.arc.io\"\n" +
+		"facilitator = \"" + fac.srv.URL + "/v1/facilitator/x402\"\n" +
+		"facilitator_headers = [\"Authorization: Bearer ${TEST_ARC_CIRCLE_KEY}\"]\n\n" +
+		oneRule
+
+	cfgPath := filepath.Join(t.TempDir(), "anteroom.toml")
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v\n%s", err, body)
+	}
+	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("gate.New: %v", err)
+	}
+	return g, fac
+}
+
+// TestArcRailOffersTheTokenDomainCirclePublishes.
+//
+// A client cannot build the EIP-3009 signature without the token's EIP-712
+// domain, and it takes those values from `extra` in our offer. Arc USDC's domain
+// name is "USDC" — Base and Polygon USDC sign as "USD Coin", and the same Circle
+// /supported response carries both spellings. Sending the wrong one yields an
+// offer that validates, parses, and can never be paid: the signature the client
+// computes is over a different domain, so the facilitator rejects every attempt
+// with a reason that says nothing about which field was wrong.
+func TestArcRailOffersTheTokenDomainCirclePublishes(t *testing.T) {
+	g, _ := arcGate(t)
+	acc := offered(g, t, "/report")
+
+	if acc["network"] != "eip155:5042" {
+		t.Fatalf("network = %v, want eip155:5042", acc["network"])
+	}
+	if acc["asset"] != "0x3600000000000000000000000000000000000000" {
+		t.Errorf("asset = %v, want Arc's ERC-20 USDC view", acc["asset"])
+	}
+	// $0.01 at six decimals. The native Arc balance is the same funds at
+	// eighteen; quoting that scale would price the content 10^12 too low.
+	if acc["amount"] != "10000" {
+		t.Errorf("amount = %v, want 10000 atomic units", acc["amount"])
+	}
+
+	extra, ok := acc["extra"].(map[string]any)
+	if !ok {
+		t.Fatalf("no extra on the Arc rail: %#v", acc)
+	}
+	if extra["name"] != "USDC" || extra["version"] != "2" {
+		t.Errorf("asset domain = %v/%v, want \"USDC\"/\"2\" — \"USD Coin\" is Base and Polygon",
+			extra["name"], extra["version"])
+	}
+	if extra["assetTransferMethod"] != "eip3009" {
+		t.Errorf("transfer method = %v, want eip3009", extra["assetTransferMethod"])
+	}
+}
+
+// TestArcPaymentSettlesThroughCirclesFacilitator walks the whole door on an Arc
+// rail: the credential reaches the facilitator, the path-bearing base URL is
+// preserved, and a settlement echoing eip155:5042 mints a pass.
+//
+// The echo is the part worth pinning. The verifier compares SettleResponse.network
+// against the configured rail as an exact string, so a facilitator that spelled
+// the network differently would turn every successful settlement into an
+// Ambiguous verdict — the payer is charged and the content is never served.
+func TestArcPaymentSettlesThroughCirclesFacilitator(t *testing.T) {
+	g, fac := arcGate(t)
+
+	acc := offered(g, t, "/report")
+	r := agentReq("/report")
+	r.Header.Set(payment.HeaderSignature, presentSigned(t, acc, "0xarcsig"))
+	w := do(g, r)
+
+	if !strings.Contains(w.Body.String(), "UPSTREAM:/report") {
+		t.Fatalf("Arc payment not served: %d %s", w.Code, w.Body.String())
+	}
+	if fac.verifyN.Load() != 1 || fac.settleN.Load() != 1 {
+		t.Errorf("verify/settle = %d/%d, want 1/1", fac.verifyN.Load(), fac.settleN.Load())
+	}
+	// Circle's facilitator authenticates with an ordinary bearer token, which is
+	// the reason this rail needs no signing key and no change to the gate.
+	if got, _ := fac.sawAuth.Load().(string); got != "Bearer sk-arc-test" {
+		t.Errorf("Authorization = %q, want the expanded Arc credential", got)
+	}
+}

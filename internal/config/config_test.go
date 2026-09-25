@@ -242,6 +242,93 @@ paid_ttl = "1h"
 	}
 }
 
+// TestArcRailThroughCircleFacilitator pins the three things about an Arc rail
+// that are not guessable and that fail quietly when guessed wrong.
+//
+// Arc is Circle's L1, where USDC is the native asset; the address below is its
+// ERC-20 view at six decimals. Circle runs a hosted x402 facilitator for it, so
+// the rail needs no relayer and no key — only a bearer credential and a base URL
+// that, unlike every other facilitator this config has seen, carries a path.
+func TestArcRailThroughCircleFacilitator(t *testing.T) {
+	t.Setenv("CIRCLE_API_KEY", "sk-test-not-a-real-key")
+
+	cfg, err := Load(write(t, minimal+`
+[payments]
+pay_to      = "0x000000000000000000000000000000000000dEaD"
+facilitator = "https://f.example"
+
+[[payments.rails]]
+network       = "eip155:72344"
+asset         = "0xsbc"
+asset_name    = "Stable Coin"
+asset_version = "1"
+asset_transfer_method = "permit2"
+
+[[payments.rails]]
+network       = "eip155:5042"
+asset         = "0x3600000000000000000000000000000000000000"
+decimals      = 6
+asset_name    = "USDC"
+asset_version = "2"
+asset_transfer_method = "eip3009"
+rpc_url       = "https://rpc.mainnet.arc.io"
+facilitator   = "https://api.circle.com/v1/facilitator/x402"
+facilitator_headers = ["Authorization: Bearer ${CIRCLE_API_KEY}"]
+
+[[payments.rules]]
+name  = "site"
+paths = ["/*"]
+price = "$0.01"
+paid_ttl = "1h"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Payments.Rails) != 2 {
+		t.Fatalf("rails = %d, want 2", len(cfg.Payments.Rails))
+	}
+	arc := cfg.Payments.Rails[1]
+
+	// A facilitator base URL with a PATH. Circle's lives at /v1/facilitator/x402
+	// and the verifier appends /verify and /settle to whatever it is given, so a
+	// validator that quietly dropped the path would send every call to the wrong
+	// place — with a 404 that looks like the facilitator being down.
+	if arc.Facilitator != "https://api.circle.com/v1/facilitator/x402" {
+		t.Errorf("facilitator base URL mangled: %q", arc.Facilitator)
+	}
+	if got := arc.FacilitatorHeader.Get("Authorization"); got != "Bearer sk-test-not-a-real-key" {
+		t.Errorf("facilitator credential = %q, want the expanded bearer token", got)
+	}
+
+	// The token's EIP-712 domain. Arc USDC signs as "USDC" where Base and Polygon
+	// USDC sign as "USD Coin" — the values are published in Circle's own
+	// /supported response. A wrong name here still produces a well-formed offer;
+	// it just makes every client signature fail verification for no stated reason.
+	if arc.AssetName != "USDC" || arc.AssetVersion != "2" {
+		t.Errorf("asset domain = %q/%q, want \"USDC\"/\"2\"", arc.AssetName, arc.AssetVersion)
+	}
+	if arc.AssetTransferMethod != "eip3009" {
+		t.Errorf("transfer method = %q, want eip3009 (Arc USDC needs no Permit2 approval)",
+			arc.AssetTransferMethod)
+	}
+
+	// Six decimals is the ERC-20 view. Arc's native balance is the same funds at
+	// eighteen, so a rail that took the native scale would quote a price 10^12
+	// too small and hand the content away.
+	if arc.Decimals != 6 {
+		t.Errorf("decimals = %d, want 6 (the ERC-20 view, not native 18)", arc.Decimals)
+	}
+	if got := cfg.Payments.Rules[0].PriceAtomic["eip155:5042"]; got == nil || got.String() != "10000" {
+		t.Errorf("$0.01 at six decimals = %v, want 10000 atomic units", got)
+	}
+
+	// pay_to is inherited rather than overridden: Arc is EVM, so the same
+	// receiving address the other rails use is already valid here.
+	if arc.PayTo != cfg.Payments.PayTo {
+		t.Errorf("rail pay_to = %q, want the inherited %q", arc.PayTo, cfg.Payments.PayTo)
+	}
+}
+
 func TestDecimalsAffectPricePerRail(t *testing.T) {
 	cfg, err := Load(write(t, minimal+`
 [payments]

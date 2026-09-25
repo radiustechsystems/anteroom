@@ -196,6 +196,57 @@ rpc_url = "https://rpc.testnet.radiustech.xyz"
                                           # Setting headers without facilitator is a
                                           # config error for the same reason.
 
+#[[payments.rails]]
+#network       = "eip155:5042"            # Arc mainnet, Circle's L1
+#asset         = "0x3600000000000000000000000000000000000000"
+                                          # USDC. On Arc, USDC is the NATIVE asset
+                                          # and this is its ERC-20 view of the same
+                                          # balance — not a wrapped token. The two
+                                          # views differ in scale: native is 18
+                                          # decimals, this interface is 6. x402
+                                          # amounts use the 6-decimal view below, so
+                                          # an operator eyeballing a balance over
+                                          # rpc_url will see a number 10^12 larger
+                                          # than the one the gate quotes. The gate
+                                          # itself never calls the chain, so it is
+                                          # unaffected either way.
+#decimals      = 6
+#asset_name    = "USDC"                   # NOT "USD Coin". Base and Polygon USDC use
+#asset_version = "2"                      # "USD Coin" for the same token's EIP-712
+                                          # domain, and Arc's is plainly "USDC" —
+                                          # confirmed from Circle's own /supported
+                                          # response. Get this wrong and the offer
+                                          # still looks well-formed while every
+                                          # client signature fails verification, with
+                                          # no reason that points at the cause.
+#asset_transfer_method = "eip3009"        # Arc USDC supports it directly; no Permit2
+                                          # approval step for the payer to discover.
+#rpc_url       = "https://rpc.mainnet.arc.io"
+#facilitator   = "https://api.circle.com/v1/facilitator/x402"
+                                          # Circle's hosted Facilitator Service: it
+                                          # verifies the EIP-3009 authorization,
+                                          # screens both addresses, PAYS THE GAS and
+                                          # broadcasts. Nothing to run, no relayer,
+                                          # no gas wallet — which is the whole reason
+                                          # this rail is cheap to offer. It serves
+                                          # Base and Polygon too, so one credential
+                                          # can cover several rails.
+                                          #
+                                          # Arc settles with deterministic instant
+                                          # finality — a transaction is final when
+                                          # included. Circle explicitly does NOT make
+                                          # that promise for the Base and Polygon
+                                          # rails on this same facilitator, where a
+                                          # reorg can still take the funds back.
+#facilitator_headers = ["Authorization: Bearer ${CIRCLE_API_KEY}"]
+                                          # a per-rail facilitator takes ONLY its own
+                                          # headers, which is what keeps this key off
+                                          # every other facilitator's host.
+
+# Arc testnet is the same rail with network = "eip155:5042002" and
+# rpc_url = "https://rpc.testnet.arc.io" — same asset address, same asset_name and
+# asset_version, same facilitator. Fund a payer at https://faucet.circle.com.
+
 # WHAT A PRICE DOES NOT DO. Read this before pricing anything.
 #
 # A price is an alternative to the puzzle, not a wall in front of the route. The

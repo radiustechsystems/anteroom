@@ -886,7 +886,7 @@ func TestPrefersMarkdown(t *testing.T) {
 		{"text/markdown;q=0", false},                // explicitly unacceptable
 		{"text/markdown;q=0, text/html;q=0", false}, // neither acceptable
 		{"text/html,application/xhtml+xml", false},  // ordinary browser
-		{"*/*", false}, // neither named
+		{"*/*", false},                              // neither named
 		{"", false},
 	} {
 		if got := prefersMarkdown(tc.accept); got != tc.want {

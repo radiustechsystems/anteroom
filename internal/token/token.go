@@ -85,15 +85,12 @@ type Pass struct {
 	// without re-admission. Empty means unbound (paid passes, and passes
 	// minted before this field existed — the gate treats those as absent).
 	IPP string `json:"ipp,omitempty"`
-	// UAH is a short hash of the User-Agent the pass was minted under. The
-	// A scraper can solve challenges under a real headless browser and then
-	// spend the passes under rotating fake browser UAs. The IP prefix alone
-	// permits that, since both personas live on
-	// the same node. Binding the UA forces solver and consumer to be the
-	// same declared client profile: rotating the presentation UA invalidates
-	// the pass, but an active relay can copy the declaration too.
-	// A hash rather than the string keeps the cookie small; empty means
-	// unbound and, like IPP, fails closed for PoW passes.
+	// UAH is a short hash of the User-Agent the pass was minted under. It is
+	// still required for PoW passes so that older gates in a mixed fleet keep
+	// accepting new passes, but current gates do not enforce it: the solve
+	// runs in a service worker, and some browsers (Android WebViews with an
+	// app-customised UA) send a different User-Agent from the worker than from
+	// the page, which turned the binding into an endless solve loop.
 	UAH string `json:"uah,omitempty"`
 	// Rt is the unix time of the ROOT admission this pass descends from.
 	// Cheap renewals carry it forward unchanged, so a renewal chain can be

@@ -117,9 +117,7 @@ func agentReq(path string) *http.Request {
 
 // solveAndGetCookie drives the real challenge API at test difficulty and
 // returns the pass cookie.
-// shape mutators are applied to both the challenge and answer requests — the
-// pass binds to the solving client's User-Agent, so a test presenting the
-// cookie under a particular UA must earn it under that UA too.
+// shape mutators are applied to both the challenge and answer requests.
 func solveAndGetCookie(t *testing.T, g *Gate, withCookie *http.Cookie, shape ...func(*http.Request)) *http.Cookie {
 	t.Helper()
 	cr := httptest.NewRequest("GET", pathChallenge, nil)
@@ -688,6 +686,38 @@ func TestAndroidWebViewPackageNameIsNotXHR(t *testing.T) {
 	}
 }
 
+// An Android WebView whose host app customises the User-Agent applies it to
+// page requests but not to service-worker fetches. The wait page solves in the
+// /.anteroom/ worker, so the pass is earned under the stock WebView UA and
+// presented on reload under the app's UA. Binding the pass to the UA made that
+// an endless wait-page loop in the X/Twitter in-app browser.
+func TestPassSurvivesServiceWorkerUserAgentMismatch(t *testing.T) {
+	g, _ := newTestGate(t, fastCfg)
+	const workerUA = "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.0.0 Mobile Safari/537.36"
+	const pageUA = workerUA + " TwitterAndroid/12.19.1-release.0 (312191000-r-00) Pixel+8/17 (Google;Pixel+8;google;shiba;0;;1;2015)"
+
+	pass := solveAndGetCookie(t, g, nil, func(r *http.Request) {
+		r.Header.Set("User-Agent", workerUA)
+	})
+
+	nav := browserReq("/article")
+	nav.Header.Set("User-Agent", pageUA)
+	nav.Header.Set("X-Requested-With", "com.twitter.android")
+	nav.AddCookie(pass)
+	if w := do(g, nav); !strings.Contains(w.Body.String(), "UPSTREAM:/article") {
+		t.Fatalf("pass earned in the worker was walled on navigation: %d", w.Code)
+	}
+
+	// The network-prefix binding still holds.
+	away := browserReq("/article")
+	away.Header.Set("User-Agent", pageUA)
+	away.RemoteAddr = "198.51.100.7:44321"
+	away.AddCookie(pass)
+	if w := do(g, away); strings.Contains(w.Body.String(), "UPSTREAM:") {
+		t.Fatal("pass was accepted from outside its /24")
+	}
+}
+
 func TestVerifiedCrawlerBypassesEveryRoute(t *testing.T) {
 	g, _ := newTestGate(t, fastCfg+`
 [bypass]
@@ -856,7 +886,7 @@ func TestPrefersMarkdown(t *testing.T) {
 		{"text/markdown;q=0", false},                // explicitly unacceptable
 		{"text/markdown;q=0, text/html;q=0", false}, // neither acceptable
 		{"text/html,application/xhtml+xml", false},  // ordinary browser
-		{"*/*", false},                              // neither named
+		{"*/*", false}, // neither named
 		{"", false},
 	} {
 		if got := prefersMarkdown(tc.accept); got != tc.want {
@@ -1904,16 +1934,8 @@ func TestPassBoundToClientNetwork(t *testing.T) {
 		t.Fatalf("pass refused within its own /24: %d", w.Code)
 	}
 
-	// Same network, different User-Agent: walled. This is the two-persona
-	// scraper shape — a headless solver earning passes that a differently
-	// dressed consumer on the same node spends.
-	r = browserReq("/x")
-	r.RemoteAddr = "192.0.2.99:1000"
-	r.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
-	r.AddCookie(c)
-	if w := do(g, r); strings.Contains(w.Body.String(), "UPSTREAM:") {
-		t.Fatal("a pass solved under one User-Agent was spent under another")
-	}
+	// The User-Agent is deliberately NOT part of the binding; see
+	// TestPassSurvivesServiceWorkerUserAgentMismatch.
 
 	// Outside the /24: walled, exactly as if no pass were presented.
 	r = browserReq("/x")

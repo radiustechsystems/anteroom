@@ -567,8 +567,8 @@ Reading an entry, four shapes cover most of what you will see:
 | Shape | Reads as |
 |---|---|
 | high `succeeded_renew`, little else | a person with a tab open — renewals are keep-alive, not visits |
-| `failed` ≈ `succeeded_admit`, both climbing | a **solve loop**: a client that earns a pass on every cycle but never presents a usable one (cookies not kept, User-Agent rotated between solve and fetch, or egress hopping /24 prefixes — the pass binds to all three), so it is walled again, re-solves, and never reaches the site |
-| `failed` ≈ `succeeded_admit` + `succeeded_renew`, both high | a **renew mill**: a solve loop split across two clients at one egress. A solver component keeps one consistent identity, so its live pass earns the cheap renewal challenge over and over, while a fetcher presents a different User-Agent (or no cookie at all) and is walled on every content request. One failure per renewal, at machine cadence — far above the roughly one renewal per `pass_ttl` a real browser produces — with an occasional `succeeded_admit` when the solver re-pays admission at the `max_session` cap |
+| `failed` ≈ `succeeded_admit`, both climbing | a **solve loop**: a client that earns a pass on every cycle but never presents a usable one (cookies not kept, or egress hopping /24 prefixes — the pass binds to both), so it is walled again, re-solves, and never reaches the site |
+| `failed` ≈ `succeeded_admit` + `succeeded_renew`, both high | a **renew mill**: a solve loop split across two clients at one egress. A solver component keeps one consistent identity, so its live pass earns the cheap renewal challenge over and over, while a fetcher presents no cookie (or presents it from another /24) and is walled on every content request. One failure per renewal, at machine cadence — far above the roughly one renewal per `pass_ttl` a real browser produces — with an occasional `succeeded_admit` when the solver re-pays admission at the `max_session` cap |
 | `failed` climbing, both success counts 0 | a scraper that never attempts the challenge at all |
 
 **The gate never judges or bans anyone.** The intended consumer is an

@@ -637,6 +637,9 @@ const (
 )
 
 // uaHash is the short User-Agent digest carried in a PoW pass (token.Pass.UAH).
+// It is still minted — the token codec requires it, and gates on an older
+// release that still enforce it must keep accepting passes this one mints
+// during a rolling upgrade — but validPassAt no longer checks it.
 // Nine bytes of SHA-256 — collisions buy an attacker nothing (the pass still
 // binds to their own UA), so the only requirement is that honest UAs don't
 // collide by accident, and 72 bits is far past that.
@@ -684,8 +687,17 @@ func (g *Gate) validPassAt(r *http.Request, at time.Time) (token.Pass, bool) {
 		if err != nil || p.Aud != requestAudience(r) {
 			continue
 		}
-		if p.Kind == token.KindPoW &&
-			(p.IPP != g.clientPrefix(r) || p.UAH != uaHash(r.Header.Get("User-Agent"))) {
+		// A PoW pass is enforced against the network prefix only, NOT the
+		// User-Agent it carries (UAH). The admission solve runs inside the
+		// /.anteroom/ service worker, and some browsers send a different
+		// User-Agent from a worker than from the page: an Android WebView whose
+		// host app customises its UA (the X/Twitter in-app browser appends
+		// "TwitterAndroid/...") applies that UA to page requests only, so the
+		// worker mints under the stock WebView UA, confirms the pass under that
+		// same UA, and the reload presents the app's UA — walled, re-solved,
+		// forever. The UA is client-declared, so the binding never stopped a
+		// solver that copied it; it only stopped real browsers like this one.
+		if p.Kind == token.KindPoW && p.IPP != g.clientPrefix(r) {
 			continue
 		}
 		// Repeated same-name cookies are legal and browsers order them by path,
